@@ -2,7 +2,7 @@
 
 use chacha20poly1305::XNonce;
 use rusqlite::types::Value;
-use rusqlite::{params, params_from_iter};
+use rusqlite::{Connection, TransactionBehavior, params, params_from_iter};
 
 use super::{Error, Handler, write};
 use crate::id::Id;
@@ -88,6 +88,27 @@ fn head_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Head, Option<Stor
     Ok((head, stored, row.get(7)?))
 }
 
+/// [`Handler::head`] on `conn`, which may be a transaction.
+fn head_on(conn: &Connection, id: Id, with_data: bool) -> super::HeadResult {
+    let (head, stored, expired) = conn.query_row(
+        &format!(
+            "SELECT {HEAD_COLUMNS}
+             FROM entries e JOIN revisions r ON r.entry_id = e.id
+             WHERE e.id = ?1
+             ORDER BY r.version DESC
+             LIMIT 1"
+        ),
+        params![id.to_i64(), with_data],
+        head_from_row,
+    )?;
+
+    if expired {
+        return Err(Error::NotFound);
+    }
+
+    Ok((head, stored))
+}
+
 impl Handler {
     /// Insert `entry` and read back its [`Head`]. The handler runs one command at a time, so no
     /// other command sees the paste between the two steps.
@@ -100,32 +121,22 @@ impl Handler {
     /// An expired paste is [`Error::NotFound`]. Unlike [`super::Database::get`], this never
     /// deletes anything, so it never consumes a burn-after-reading paste.
     pub(super) fn head(&self, id: Id, with_data: bool) -> super::HeadResult {
-        let (head, stored, expired) = self.conn.query_row(
-            &format!(
-                "SELECT {HEAD_COLUMNS}
-                 FROM entries e JOIN revisions r ON r.entry_id = e.id
-                 WHERE e.id = ?1
-                 ORDER BY r.version DESC
-                 LIMIT 1"
-            ),
-            params![id.to_i64(), with_data],
-            head_from_row,
-        )?;
-
-        if expired {
-            return Err(Error::NotFound);
-        }
-
-        Ok((head, stored))
+        head_on(&self.conn, id, with_data)
     }
 
-    /// Read the head of `id` with its stored bytes and delete the paste, as one command. The
-    /// handler runs one command at a time, so of two consumers of the same paste exactly one gets
-    /// it and the other [`Error::NotFound`].
-    pub(super) fn consume(&self, id: Id) -> Result<(Head, Stored), Error> {
-        let (head, stored) = self.head(id, true)?;
-        self.conn
-            .execute("DELETE FROM entries WHERE id = ?1", params![id.to_i64()])?;
+    /// Read the head of `id` with its stored bytes and delete the paste, in one transaction that
+    /// takes the write lock before the read. Of two consumers of the same paste, on this handler
+    /// or on another connection to the same file, exactly one gets it and the other
+    /// [`Error::NotFound`].
+    pub(super) fn consume(&mut self, id: Id) -> Result<(Head, Stored), Error> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (head, stored) = head_on(&tx, id, true)?;
+        if tx.execute("DELETE FROM entries WHERE id = ?1", params![id.to_i64()])? == 0 {
+            return Err(Error::NotFound);
+        }
+        tx.commit()?;
         Ok((head, stored.ok_or(Error::NotFound)?))
     }
 

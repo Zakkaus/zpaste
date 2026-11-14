@@ -89,20 +89,14 @@ async fn head_never_consumes_burn_paste() -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
-#[tokio::test]
-async fn expired_paste_is_not_found() -> Result<(), Box<dyn std::error::Error>> {
-    let db = new_db()?;
+#[test]
+fn expired_paste_is_not_found() -> Result<(), Box<dyn std::error::Error>> {
+    let mut handler = handler()?;
+    let id = insert_at(&mut handler, 1, None)?;
+    assert!(handler.head(id, false).is_ok());
 
-    let head = db
-        .create(write::Entry {
-            text: "x".to_string(),
-            expires: NonZeroU32::new(1),
-            ..Default::default()
-        })
-        .await?;
-
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    assert!(matches!(db.head(head.id).await, Err(Error::NotFound)));
+    expire(&handler, id)?;
+    assert!(matches!(handler.head(id, false), Err(Error::NotFound)));
 
     Ok(())
 }
@@ -175,26 +169,6 @@ async fn concurrent_consumers_get_a_paste_once() -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
-/// Creates pastes for `uid` and returns their ids in creation order.
-async fn create_many(
-    db: &Database,
-    uid: i64,
-    count: usize,
-) -> Result<Vec<Id>, Box<dyn std::error::Error>> {
-    let mut ids = Vec::new();
-    for n in 0..count {
-        let head = db
-            .create(write::Entry {
-                text: format!("paste {n}"),
-                uid: Some(uid),
-                ..Default::default()
-            })
-            .await?;
-        ids.push(head.id);
-    }
-    Ok(ids)
-}
-
 /// A handler on a fresh in-memory database, driven directly so a test can set `created_at`.
 fn handler() -> Result<Handler, Box<dyn std::error::Error>> {
     let (_sender, receiver) = kanal::bounded(1);
@@ -222,6 +196,14 @@ fn insert_at(
         rusqlite::params![created_at, id.to_i64()],
     )?;
     Ok(id)
+}
+
+fn expire(handler: &Handler, id: Id) -> Result<(), Box<dyn std::error::Error>> {
+    handler.conn.execute(
+        "UPDATE entries SET expires = datetime('now', '-1 second') WHERE id = ?1",
+        rusqlite::params![id.to_i64()],
+    )?;
+    Ok(())
 }
 
 #[test]
@@ -270,29 +252,79 @@ fn list_pages_by_owner_newest_first() -> Result<(), Box<dyn std::error::Error>> 
     Ok(())
 }
 
-#[tokio::test]
-async fn list_skips_expired_and_refuses_them_as_marker() -> Result<(), Box<dyn std::error::Error>> {
-    let db = new_db()?;
-    let expiring = db
-        .create(write::Entry {
-            text: "x".to_string(),
-            uid: Some(1),
-            expires: NonZeroU32::new(1),
-            ..Default::default()
-        })
-        .await?;
-    let kept = create_many(&db, 1, 1).await?;
+#[test]
+fn list_skips_expired_and_refuses_them_as_marker() -> Result<(), Box<dyn std::error::Error>> {
+    let mut handler = handler()?;
+    let expiring = insert_at(&mut handler, 1, Some("2026-01-02 00:00:00"))?;
+    let kept = insert_at(&mut handler, 1, Some("2026-01-01 00:00:00"))?;
+    expire(&handler, expiring)?;
 
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    let page = db.list_for(&[1], None, 20).await?;
+    let page = handler.list_for(&[1], None, 20)?;
     assert_eq!(
         page.heads.iter().map(|head| head.id).collect::<Vec<_>>(),
-        kept
+        [kept]
     );
     assert!(matches!(
-        db.list_for(&[1], Some(expiring.id), 20).await,
+        handler.list_for(&[1], Some(expiring), 20),
         Err(Error::InvalidMarker)
     ));
+
+    Ok(())
+}
+
+/// Two handlers on their own connections to one database file race to consume each paste:
+/// exactly one of them gets it.
+#[test]
+fn consumers_on_two_connections_get_a_paste_once() -> Result<(), Box<dyn std::error::Error>> {
+    let path = std::env::temp_dir().join(format!(
+        "wastebin-consume-{}-{}.sqlite",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    let result = race_consumers(&path);
+    for suffix in ["", "-journal"] {
+        let mut file = path.clone().into_os_string();
+        file.push(suffix);
+        let _ = std::fs::remove_file(file);
+    }
+    result
+}
+
+fn race_consumers(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    let open = || -> Result<Handler, Box<dyn std::error::Error>> {
+        let (_sender, receiver) = kanal::bounded(1);
+        Ok(Handler::with_connection(
+            rusqlite::Connection::open(path)?,
+            receiver,
+        )?)
+    };
+    let mut first = open()?;
+    let mut second = open()?;
+
+    for _ in 0..100 {
+        let id = insert_at(&mut first, 1, None)?;
+        let start = std::sync::Barrier::new(2);
+        let (a, b) = std::thread::scope(|scope| {
+            let a = scope.spawn(|| {
+                start.wait();
+                first.consume(id)
+            });
+            let b = scope.spawn(|| {
+                start.wait();
+                second.consume(id)
+            });
+            (a.join(), b.join())
+        });
+        let won = [a.map_err(|_| "panic")?, b.map_err(|_| "panic")?]
+            .into_iter()
+            .filter_map(|result| match result {
+                Ok(_) => Some(Ok(())),
+                Err(Error::NotFound) => None,
+                Err(err) => Some(Err(err)),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(won.len(), 1);
+    }
 
     Ok(())
 }
