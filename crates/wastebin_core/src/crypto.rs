@@ -10,7 +10,8 @@ use tokio::task::spawn_blocking;
 
 use crate::env;
 
-static CONFIG: LazyLock<argon2::Config> = LazyLock::new(|| argon2::Config {
+/// The parameters every stored paste was encrypted under; changing them locks those pastes out.
+const PRODUCTION_KDF: argon2::Config<'static> = argon2::Config {
     variant: argon2::Variant::Argon2i,
     version: argon2::Version::Version13,
     mem_cost: 65536,
@@ -20,7 +21,25 @@ static CONFIG: LazyLock<argon2::Config> = LazyLock::new(|| argon2::Config {
     secret: &[],
     ad: &[],
     hash_length: 32,
-});
+};
+
+#[cfg(any(test, not(feature = "test-fast-kdf")))]
+const KDF: argon2::Config<'static> = PRODUCTION_KDF;
+
+/// The cheapest parameters Argon2 accepts, for the server's tests only. Cargo unifies the feature
+/// into this crate's own test build too, which `cfg(test)` overrides, so these tests always
+/// derive at production cost.
+#[cfg(all(not(test), feature = "test-fast-kdf"))]
+const KDF: argon2::Config<'static> = argon2::Config {
+    mem_cost: 8,
+    time_cost: 1,
+    lanes: 1,
+    thread_mode: argon2::ThreadMode::Sequential,
+    ..PRODUCTION_KDF
+};
+
+#[cfg(all(feature = "test-fast-kdf", not(debug_assertions)))]
+compile_error!("`test-fast-kdf` weakens every password key and is only for debug test builds");
 
 static SALT: LazyLock<String> = LazyLock::new(env::password_hash_salt);
 
@@ -107,7 +126,7 @@ impl From<Vec<u8>> for Plaintext {
 }
 
 fn cipher_from(password: &[u8]) -> Result<XChaCha20Poly1305, Error> {
-    let key = argon2::hash_raw(password, SALT.as_bytes(), &CONFIG)?;
+    let key = argon2::hash_raw(password, SALT.as_bytes(), &KDF)?;
     let key = Key::try_from(key.as_slice()).map_err(|_| Error::ChaCha20Poly1305Encrypt)?;
     Ok(XChaCha20Poly1305::new(&key))
 }
@@ -176,6 +195,22 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(decrypted, plaintext.as_bytes());
+    }
+
+    #[test]
+    fn derives_with_production_parameters() {
+        let production = argon2::Config {
+            variant: argon2::Variant::Argon2i,
+            version: argon2::Version::Version13,
+            mem_cost: 65536,
+            time_cost: 10,
+            lanes: 4,
+            thread_mode: argon2::ThreadMode::Parallel,
+            secret: &[],
+            ad: &[],
+            hash_length: 32,
+        };
+        assert_eq!(KDF, production);
     }
 
     #[tokio::test]

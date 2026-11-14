@@ -470,6 +470,11 @@ rollback past a migration restores the backup; see [workflow.md](workflow.md).
   iterations and 4 lanes per derivation. The parameters stay, because changing
   them would make existing encrypted pastes unreadable. The shared concurrency
   limit and the per-IP rate limit (invariants 10, 11) bound the memory.
+  The server's tests derive with Argon2's cheapest parameters through the
+  `wastebin_core` feature `test-fast-kdf`, which only the server's
+  dev-dependency enables and which refuses to compile in an optimized build:
+  the server's tests prove request logic, and `wastebin_core`'s own tests,
+  which ignore the feature, prove the encryption at production cost.
   Current: the concurrency limit is built in `Database` (`crypto::KdfLimit`),
   so every derivation path, `/v1` and legacy, passes through it. It allows
   `WASTEBIN_KDF_CONCURRENCY` derivations at once (default 2, 128 MiB); a
