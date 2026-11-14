@@ -4,6 +4,7 @@ import {join} from 'node:path';
 import {afterAll, describe, expect, it} from 'vitest';
 import {readEmbeddedPaste, type PasteMeta} from '../src/shell/embedded.ts';
 import {DEFAULT_FIXTURE, fixturePaste, withEmbeddedPaste} from './fixture.ts';
+import {longMarkdown} from './longFixture.ts';
 
 /** Every field of `GET /v1/pastes/{id}` the shell embeds, so a field dropped from the fixture fails here. */
 const META_KEYS: Array<keyof PasteMeta> = [
@@ -55,5 +56,15 @@ describe('withEmbeddedPaste', () => {
     expect(html.indexOf('zpaste-paste')).toBeLessThan(html.indexOf('id="root"'));
     document.documentElement.innerHTML = html;
     expect(readEmbeddedPaste(document)).toEqual(data);
+  });
+});
+
+describe('longMarkdown', () => {
+  it('holds at least 1,600 lines and 60 headings, more than the rail shows', () => {
+    const source = longMarkdown();
+    expect(source.split('\n').length).toBeGreaterThanOrEqual(1600);
+    const headings = source.split('\n').filter(line => /^#{1,4} /.test(line));
+    expect(headings.length).toBeGreaterThanOrEqual(60);
+    expect(new Set(headings).size).toBe(headings.length);
   });
 });

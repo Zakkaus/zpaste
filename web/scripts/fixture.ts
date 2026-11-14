@@ -10,7 +10,11 @@ export const DEFAULT_FIXTURE = join(dirname(fileURLToPath(import.meta.url)), '..
 
 export function fixturePaste(path: string = process.env.ZPASTE_FIXTURE ?? DEFAULT_FIXTURE): EmbeddedPaste {
   const extension = extname(path).slice(1) || null;
-  const id = basename(path, extname(path));
+  return embeddedPaste(basename(path, extname(path)), extension, readFileSync(path, 'utf8'));
+}
+
+/** A paste with id `id` holding `content`, as `GET /v1/pastes/{id}` returns it. */
+export function embeddedPaste(id: string, extension: string | null, content: string): EmbeddedPaste {
   return {
     paste: {
       id,
@@ -23,7 +27,7 @@ export function fixturePaste(path: string = process.env.ZPASTE_FIXTURE ?? DEFAUL
       version: 1,
       version_id: '0'.repeat(64),
     },
-    content: readFileSync(path, 'utf8'),
+    content,
     etag: `"${'0'.repeat(64)}"`,
     url_extension: extension,
   };
