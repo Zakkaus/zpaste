@@ -10,6 +10,7 @@ use tokio::sync::oneshot;
 use crate::crypto::{self, Password};
 use crate::expiration::Expiration;
 use crate::id::Id;
+use crate::revision;
 use read::{DatabaseEntry, ListEntry, Metadata};
 
 /// Database related errors.
@@ -341,11 +342,19 @@ impl Handler {
     fn new(method: Open, receiver: kanal::Receiver<Command>) -> Result<Self, Error> {
         tracing::debug!("opening {method:?}");
 
-        let mut conn = match method {
+        let conn = match method {
             Open::Memory => Connection::open_in_memory()?,
             Open::Path(path) => Connection::open(path)?,
         };
 
+        Self::with_connection(conn, receiver)
+    }
+
+    /// Migrate `conn` to the latest schema and use it.
+    fn with_connection(
+        mut conn: Connection,
+        receiver: kanal::Receiver<Command>,
+    ) -> Result<Self, Error> {
         let migrations = Migrations::new(vec![
             M::up(include_str!("migrations/0001-initial.sql")),
             M::up(include_str!("migrations/0002-add-created-column.sql")),
@@ -381,6 +390,14 @@ impl Handler {
             M::up(include_str!("migrations/0005-drop-text-column.sql")),
             M::up(include_str!("migrations/0006-add-nonce-column.sql")),
             M::up(include_str!("migrations/0007-add-title-column.sql")),
+            M::up_with_hook(
+                include_str!("migrations/0008-add-revisions.sql"),
+                |tx: &Transaction| {
+                    let rows = revision::backfill(tx)?;
+                    tracing::debug!("backfilled the first revision of {rows} rows");
+                    Ok(())
+                },
+            ),
         ]);
 
         migrations.to_latest(&mut conn)?;
@@ -432,24 +449,26 @@ impl Handler {
         }
     }
 
+    /// Insert the entry and its first revision in one transaction.
     fn insert(
-        &self,
+        &mut self,
         write::DatabaseEntry { entry, data, nonce }: write::DatabaseEntry,
     ) -> Result<(Id, write::Entry), Error> {
         let mut counter = 0;
         let title = entry.title.clone();
         let nonce = nonce.as_ref().map(|n| n.as_slice());
+        let tx = self.conn.transaction()?;
 
         loop {
             let id = Id::rand();
 
             let result = match entry.expires {
-                None => self.conn.execute(
-                    "INSERT INTO entries (id, uid, data, burn_after_reading, nonce, title) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    params![id.to_i64(), entry.uid, data, entry.burn_after_reading, nonce, title],
+                None => tx.execute(
+                    "INSERT INTO entries (id, uid, data, burn_after_reading, nonce, title, extension, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))",
+                    params![id.to_i64(), entry.uid, data, entry.burn_after_reading, nonce, title, entry.extension],
                 ),
-                Some(expires) => self.conn.execute(
-                    "INSERT INTO entries (id, uid, data, burn_after_reading, nonce, expires, title) VALUES (?1, ?2, ?3, ?4, ?5, datetime('now', ?6), ?7)",
+                Some(expires) => tx.execute(
+                    "INSERT INTO entries (id, uid, data, burn_after_reading, nonce, expires, title, extension, created_at) VALUES (?1, ?2, ?3, ?4, ?5, datetime('now', ?6), ?7, ?8, datetime('now'))",
                     params![
                         id.to_i64(),
                         entry.uid,
@@ -458,6 +477,7 @@ impl Handler {
                         nonce,
                         format!("{expires} seconds"),
                         title,
+                        entry.extension,
                     ],
                 ),
             };
@@ -480,6 +500,8 @@ impl Handler {
                 Err(err) => break Err(err)?,
                 Ok(rows) => {
                     debug_assert!(rows == 1);
+                    revision::insert_first(&tx, id.to_i64(), &data, title.as_deref())?;
+                    tx.commit()?;
                     return Ok((id, entry));
                 }
             }
@@ -763,6 +785,9 @@ impl Database {
         command_result.await?
     }
 }
+
+#[cfg(test)]
+mod revision_tests;
 
 #[cfg(test)]
 mod tests {

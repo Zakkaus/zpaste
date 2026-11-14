@@ -1,7 +1,8 @@
-//! Version ids of stored pastes.
+//! Version ids and the revision rows stored next to each entry.
 
 use std::fmt;
 
+use rusqlite::{Transaction, params};
 use sha2::{Digest, Sha256};
 
 /// Identifier of one stored version: a SHA-256 hash chain over the stored bytes.
@@ -53,6 +54,51 @@ impl fmt::Display for VersionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.iter().try_for_each(|byte| write!(f, "{byte:02x}"))
     }
+}
+
+/// Write version 1 of entry `entry_id` from the bytes `entries` holds for it.
+///
+/// The row copies `data`, `nonce`, `title` and `created_at` from `entries` inside `tx`, so the
+/// revision always matches what the entry stores; `data` and `title` are only hashed here.
+pub(crate) fn insert_first(
+    tx: &Transaction,
+    entry_id: i64,
+    data: &[u8],
+    title: Option<&str>,
+) -> rusqlite::Result<VersionId> {
+    let version_id = VersionId::compute(None, data, title);
+
+    tx.execute(
+        "INSERT INTO revisions (entry_id, version, version_id, parent_id, data, nonce, title, created_at)
+         SELECT id, 1, ?2, NULL, data, nonce, title, created_at FROM entries WHERE id = ?1",
+        params![entry_id, version_id.as_bytes()],
+    )?;
+
+    Ok(version_id)
+}
+
+/// Write version 1 for every entry that has no revision yet and return how many were written.
+///
+/// Reads only the stored bytes: nothing is decrypted, and burn-after-reading entries stay unread.
+/// Entries that already have a revision are skipped, so a second run writes nothing.
+pub(crate) fn backfill(tx: &Transaction) -> rusqlite::Result<usize> {
+    let mut select = tx.prepare(
+        "SELECT id FROM entries e WHERE NOT EXISTS (SELECT 1 FROM revisions r WHERE r.entry_id = e.id)",
+    )?;
+    let ids = select
+        .query_map([], |row| row.get::<_, i64>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut read = tx.prepare("SELECT data, title FROM entries WHERE id = ?1")?;
+
+    for &id in &ids {
+        let (data, title) = read.query_row([id], |row| {
+            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Option<String>>(1)?))
+        })?;
+        insert_first(tx, id, &data, title.as_deref())?;
+    }
+
+    Ok(ids.len())
 }
 
 #[cfg(test)]

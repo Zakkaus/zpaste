@@ -10,6 +10,16 @@ section is missing, so add it before tagging. wastebin's own changes up to commi
 The first Zpaste version is a beta. Its tag `v0.1.0-beta.1` publishes a GitHub
 prerelease and the image tag `0.1.0-beta.1`.
 
+### Added
+
+- Database migration 8 adds a `revisions` table and the `extension` and
+  `created_at` columns. Every new paste stores its first version in the same
+  transaction; the migration writes the first version of every existing paste
+  from its stored bytes, without decrypting it or consuming a
+  burn-after-reading paste. A paste's versions are deleted with it. The
+  database file grows by about the size of the stored pastes, and an older
+  executable refuses the migrated database, so a rollback restores the backup.
+
 ### Changed
 
 - The server executable is named `zpaste`, and log lines name `zpaste` as their
