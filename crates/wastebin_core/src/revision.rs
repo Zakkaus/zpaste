@@ -50,6 +50,12 @@ impl VersionId {
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+
+    /// Id from the 32 bytes stored in the database.
+    #[must_use]
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
 }
 
 impl fmt::Display for VersionId {

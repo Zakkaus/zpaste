@@ -11,7 +11,10 @@ use crate::crypto::{self, Password};
 use crate::expiration::Expiration;
 use crate::id::Id;
 use crate::revision;
+pub use head::Head;
 use read::{DatabaseEntry, ListEntry, Metadata};
+
+mod head;
 
 /// Database related errors.
 #[derive(thiserror::Error, Debug)]
@@ -57,6 +60,9 @@ struct Handler {
     receiver: kanal::Receiver<Command>,
 }
 
+/// A [`Head`] and, when asked for, the stored bytes of its version.
+type HeadResult = Result<(Head, Option<Vec<u8>>), Error>;
+
 /// Commands issued to the database handler and corresponding to [`Database`] calls.
 enum Command {
     Insert {
@@ -92,6 +98,15 @@ enum Command {
     },
     Purge {
         result: oneshot::Sender<Result<Vec<Id>, Error>>,
+    },
+    Create {
+        entry: write::DatabaseEntry,
+        result: oneshot::Sender<Result<Head, Error>>,
+    },
+    Head {
+        id: Id,
+        with_data: bool,
+        result: oneshot::Sender<HeadResult>,
     },
 }
 
@@ -311,20 +326,25 @@ pub mod read {
 
     impl CompressedReadEntry {
         pub async fn decompress(self) -> Result<UncompressedEntry, Error> {
-            let mut decoder = ZstdDecoder::new(Cursor::new(self.data));
-            let mut text = String::new();
-
-            decoder
-                .read_to_string(&mut text)
-                .await
-                .map_err(|e| Error::Compression(e.to_string()))?;
-
             Ok(UncompressedEntry {
-                text,
+                text: decompress(self.data).await?,
                 metadata: self.metadata,
                 must_be_deleted: self.must_be_deleted,
             })
         }
+    }
+
+    /// Decompress the stored bytes of a plain (unencrypted) paste into its text.
+    pub async fn decompress(data: Vec<u8>) -> Result<String, Error> {
+        let mut decoder = ZstdDecoder::new(Cursor::new(data));
+        let mut text = String::new();
+
+        decoder
+            .read_to_string(&mut text)
+            .await
+            .map_err(|e| Error::Compression(e.to_string()))?;
+
+        Ok(text)
     }
 }
 
@@ -440,6 +460,16 @@ impl Handler {
                 }
                 Command::Purge { result } => result
                     .send(self.purge())
+                    .map_err(|_| Error::ResultSendError),
+                Command::Create { entry, result } => result
+                    .send(self.create(entry))
+                    .map_err(|_| Error::ResultSendError),
+                Command::Head {
+                    id,
+                    with_data,
+                    result,
+                } => result
+                    .send(self.head(id, with_data))
                     .map_err(|_| Error::ResultSendError),
             };
 
@@ -663,6 +693,44 @@ impl Database {
             .await
             .map_err(|_| Error::SendError)?;
 
+        command_result.await?
+    }
+
+    /// Insert `entry` like [`Database::insert`] and return the [`Head`] of the new paste.
+    pub async fn create(&self, entry: write::Entry) -> Result<Head, Error> {
+        let entry = entry.compress().await?.encrypt().await?;
+
+        let (result, command_result) = oneshot::channel();
+        self.sender
+            .send(Command::Create { entry, result })
+            .await
+            .map_err(|_| Error::SendError)?;
+
+        command_result.await?
+    }
+
+    /// Get the [`Head`] of `id` without reading content. Never deletes or consumes the paste.
+    pub async fn head(&self, id: Id) -> Result<Head, Error> {
+        Ok(self.head_command(id, false).await?.0)
+    }
+
+    /// Get the [`Head`] of `id` and the stored bytes of its head version (compressed, and
+    /// ciphertext when encrypted). Never deletes or consumes the paste.
+    pub async fn head_with_data(&self, id: Id) -> Result<(Head, Vec<u8>), Error> {
+        let (head, data) = self.head_command(id, true).await?;
+        Ok((head, data.unwrap_or_default()))
+    }
+
+    async fn head_command(&self, id: Id, with_data: bool) -> HeadResult {
+        let (result, command_result) = oneshot::channel();
+        self.sender
+            .send(Command::Head {
+                id,
+                with_data,
+                result,
+            })
+            .await
+            .map_err(|_| Error::SendError)?;
         command_result.await?
     }
 
