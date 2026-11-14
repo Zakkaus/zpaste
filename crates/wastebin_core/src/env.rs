@@ -12,6 +12,8 @@ pub mod vars {
     pub const HTTP_TIMEOUT: &str = "WASTEBIN_HTTP_TIMEOUT";
     /// Number of password key derivations allowed to run at once.
     pub const KDF_CONCURRENCY: &str = "WASTEBIN_KDF_CONCURRENCY";
+    /// Password key derivations one client may ask for per minute, also its burst.
+    pub const KDF_RATE: &str = "WASTEBIN_KDF_RATE";
     /// Maximum body size.
     pub const MAX_BODY_SIZE: &str = "WASTEBIN_MAX_BODY_SIZE";
     /// Password salt for encryption.
@@ -26,6 +28,8 @@ pub mod vars {
     pub const TITLE: &str = "WASTEBIN_TITLE";
     /// Unix socket path the server binds to.
     pub const SOCKET_PATH: &str = "WASTEBIN_UNIX_SOCKET_PATH";
+    /// Proxies whose `CF-Connecting-IP` header names the client: CIDR ranges and `unix`.
+    pub const TRUSTED_PROXIES: &str = "WASTEBIN_TRUSTED_PROXIES";
 }
 
 pub(crate) fn password_hash_salt() -> String {
