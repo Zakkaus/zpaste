@@ -3,3 +3,5 @@
 /.git
 /.github
 /justfile
+/web/node_modules
+/web/dist

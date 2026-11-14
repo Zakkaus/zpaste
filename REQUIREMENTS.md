@@ -21,7 +21,7 @@ vendored package, a generated tree).
 | --- | --- | --- |
 | AGENTS.md | yes | |
 | .github/AGENTS.md | yes | |
-| web/AGENTS.md | yes | The file exists before `web/` does; its rows are under "Not yet enforced" until P1 |
+| web/AGENTS.md | yes | `web/` holds the first reading screen (P1); rows without a gate yet are under "Not yet enforced" |
 | crates/AGENTS.md | yes | |
 
 ## Commands
@@ -33,7 +33,7 @@ as the baseline; then the limit, as the baseline plus a margin (start at 20%).
 | Tier | Command | Runs (where, when) | Wall-time limit | Baseline (date, host, load) |
 | --- | --- | --- | --- | --- |
 | Pre-commit | | | | |
-| Merge gate | `cargo clippy -- -Dwarnings`; `cargo fmt --all --check`; `cargo test --all-targets`; `python3 -I scripts/check-requirements.py`; `python3 -I scripts/test_check_requirements.py`; `scripts/test_check_version_tag.sh`; `./build-docker-image.sh` | GitHub Actions on every pull request and every push to main: `rust.yml` (jobs "Test and lint", "Requirements check" and "Version tag check") and `image.yml` (job "Build image", which builds the same Dockerfile target as the script and, on main, also pushes it); the same commands run locally | 25 s for the cargo and Python commands, cold target directory; 170 s for the image build with no build cache (CI uses a layer cache, so its time is lower); both on the desktop below; CI wall time not measured | cargo and Python: 21.1 s median of 3 cold runs (21.3, 20.8, 21.1 s), 2026-11-14, desktop `gentoo` (32 threads), load 9.4 to 14.1; tests alone 3.8, 3.8, 3.9 s warm. Image: 135.4 s median of 3 runs of `./build-docker-image.sh --no-cache --network host` on rootless Docker (132.2, 137.8, 135.4 s; the limit is 20% over the slowest, rounded up), 2026-11-14, desktop `gentoo` (32 threads), load 4.9 to 8.8 |
+| Merge gate | `cargo clippy -- -Dwarnings`; `cargo fmt --all --check`; `cargo test --all-targets`; `python3 -I scripts/check-requirements.py`; `python3 -I scripts/test_check_requirements.py`; `scripts/test_check_version_tag.sh`; `./build-docker-image.sh`; in `web/`: `pnpm install --frozen-lockfile`; `pnpm lint`; `pnpm typecheck`; `pnpm test`; `pnpm build`; `pnpm check:size` | GitHub Actions on every pull request and every push to main: `rust.yml` (jobs "Test and lint", "Requirements check" and "Version tag check") `image.yml` (job "Build image", which builds the same Dockerfile target as the script and, on main, also pushes it) and `web.yml` (job "Lint, test and build"); the same commands run locally | 25 s for the cargo and Python commands, cold target directory; 170 s for the image build with no build cache (CI uses a layer cache, so its time is lower); 8 s for the `web/` commands with no `node_modules` and a warm pnpm store; all on the desktop below; CI wall time not measured | cargo and Python: 21.1 s median of 3 cold runs (21.3, 20.8, 21.1 s), 2026-11-14, desktop `gentoo` (32 threads), load 9.4 to 14.1; tests alone 3.8, 3.8, 3.9 s warm. Image: 135.4 s median of 3 runs of `./build-docker-image.sh --no-cache --network host` on rootless Docker (132.2, 137.8, 135.4 s; the limit is 20% over the slowest, rounded up), 2026-11-14, desktop `gentoo` (32 threads), load 4.9 to 8.8. Web: 6.2 s median of 3 runs (6.2, 5.8, 6.6 s; the limit is 20% over the slowest, rounded up), 2026-11-15, desktop `gentoo` (32 threads), load 3.6 to 4.0 |
 | Scheduled run on main | | | | |
 | Release | `scripts/check-version-tag.sh "$TAG"`; `scripts/export-executables.sh dist --image IMAGE` | `release.yml`, on a `v*` tag: checks the tag against Cargo.toml and main, builds and pushes the image once, copies the executables out of that image, creates the release from `CHANGELOG.md` with the image digest in its notes and attaches the x86_64 musl executables; `image.yml` never pushes a version | 170 s for the image build; the push, pull, export and release steps are not measured, and CI wall time is not measured | the merge-gate image build: 135.4 s median of 3 runs (132.2, 137.8, 135.4 s), 2026-11-14, desktop `gentoo` (32 threads), load 4.9 to 8.8 |
 
@@ -51,8 +51,8 @@ meanwhile.
 | Supported widths (phone, laptop, wide) | | | screenshots |
 | Full end-to-end run, wall time | | | |
 | Slowest test package | 2.5 s (`wastebin_core`) | 2.01 s, `wastebin_core`, identical in 3 warm `cargo test --all-targets` runs (2.01, 2.01, 2.01 s; next slowest `wastebin` 1.1 s), 2026-11-14, desktop `gentoo` (32 threads), load 7.1 to 9.9 | review of the `cargo test` output |
-| Frontend entry chunk, gzip | | | |
-| Frontend total JS + CSS, gzip | | | |
+| Frontend entry chunk, gzip | 324,000 bytes | 269,809 bytes: `web/dist` entry script, gzip level 9, identical in 3 builds of the first reading screen (React, Astryx `Markdown`, `CodeBlock`, `Outline`, `Drawer`, `AppShell`), 2026-11-15, desktop `gentoo` (32 threads), load 3.6 to 4.0; the limit is 20% over, rounded up | `node web/scripts/check-size.ts` |
+| Frontend total JS + CSS, gzip | 464,000 bytes | 386,441 bytes: every `.js` and `.css` file in `web/dist/assets`, lazy chunks included, gzip level 9, identical in the same 3 builds; fonts excluded | `node web/scripts/check-size.ts` |
 | Release server executable size | 13,300,000 bytes | 11,028,216 bytes (`zpaste`, copied out of the amd64 image: static x86_64 musl, release profile, `strip = "debuginfo"`, `lto = "fat"`, built with zig); identical sha256 in 3 cold image builds, 2026-11-14, desktop `gentoo` (32 threads), load 4.9 to 8.8; `wastebin-ctl` 3,748,520 bytes | review |
 | Source file size, p90 of this repository (pass bar) | 437 lines | 437 lines: nearest-rank p90 of the 63 tracked `.rs`, `.html`, `.css`, `.js` and `.sql` files under `crates/` (largest: `style.css` 1,221 lines), 2026-11-14, desktop `gentoo`; recount when the upstream templates and CSS are removed | review |
 | Wait timeout before a stuck step is recorded and left | | a setting, not measured | agent |
@@ -94,13 +94,13 @@ tagged rule marked as not applying needs the owner's approval, quoted in the com
 | AGENTS.md: Commits and pull requests | | `REVIEW.md`, "CI, docs and commits" | |
 | AGENTS.md: Frontend–backend mapping (when both exist) | | | |
 | .github/AGENTS.md: Tiers, jobs and gates | `python3 -I scripts/check-requirements.py` | `REVIEW.md`, "CI, docs and commits" | |
-| web/AGENTS.md: Components and modularity | | | |
+| web/AGENTS.md: Components and modularity | `pnpm --dir web lint` | | |
 | web/AGENTS.md: Consistency | | | |
 | web/AGENTS.md: Layout, type and loading | | | |
 | web/AGENTS.md: i18n (if present) | | | |
 | web/AGENTS.md: Usability | | | |
 | web/AGENTS.md: Accessibility | | | |
-| web/AGENTS.md: Performance | | | |
+| web/AGENTS.md: Performance | `node web/scripts/check-size.ts` | | |
 | crates/AGENTS.md: APIs and modularity | | `REVIEW.md`, "Pass bar" | |
 | crates/AGENTS.md: Compatibility | | `REVIEW.md`, "Checking against the rules", Migrations | |
 | crates/AGENTS.md: Logging | | `REVIEW.md`, "Checking against the rules", Sensitive data | |
@@ -145,21 +145,17 @@ body.
 | --- | --- | --- | --- |
 | Commands: Pre-commit | no pre-commit hook exists; the fast read-only check would be `cargo fmt --all --check` | add a versioned hook that runs it and a script that installs it | 2026-12-14 |
 | Commands: Scheduled run on main | no scheduled workflow exists | add one for the heavy suites once any exist (full end-to-end in P1) | 2027-01-31 |
-| Numbers: Type scale (role: size / line height) | not measured; `web/` does not exist until P1 | P1 sets the scale in the design-language document and measures it in the first screen shown to the owner (plan v11, section 六, P1) | 2027-01-31 |
-| Numbers: Spacing scale (section, card, inside card, label to field) | not measured; `web/` does not exist until P1 | set with the type scale in P1 (plan v11, section 六, P1) | 2027-01-31 |
-| Numbers: Page frame width; readable column width | not measured; `web/` does not exist until P1 | set with the design language in P1; checked by the end-to-end page-width check (plan v11, section 六, P1) | 2027-01-31 |
-| Numbers: Supported widths (phone, laptop, wide) | not measured; `web/` does not exist until P1 | plan names 320 to 1280 px with no horizontal page scroll, 390 px for tables; confirm against the first screen (plan v11, sections 三 and 六) | 2027-01-31 |
-| Numbers: Full end-to-end run, wall time | not measured; `web/` does not exist until P1 | measure after the first end-to-end suite lands in P1 (plan v11, section 六, P1) | 2027-01-31 |
-| Numbers: Frontend entry chunk, gzip | not measured; `web/` does not exist until P1 | P1 acceptance requires cold-load transfer, first readable time and the scroll of a 1,600-line document inside a budget; the plan gives no figure, so measure the first reading page, then set the limit (plan v11, section 六, P1) | 2027-01-31 |
-| Numbers: Frontend total JS + CSS, gzip | not measured; `web/` does not exist until P1 | set with the entry chunk; mermaid and mind map load on demand and stay outside it (P1b) (plan v11, section 六, P1) | 2027-01-31 |
+| Numbers: Type scale (role: size / line height) | not measured; `web/` holds only the first reading screen, awaiting the owner's approval | P1 sets the scale in the design-language document and measures it in the first screen shown to the owner (plan v11, section 六, P1) | 2027-01-31 |
+| Numbers: Spacing scale (section, card, inside card, label to field) | not measured; `web/` holds only the first reading screen, awaiting the owner's approval | set with the type scale in P1 (plan v11, section 六, P1) | 2027-01-31 |
+| Numbers: Page frame width; readable column width | not measured; `web/` holds only the first reading screen, awaiting the owner's approval | set with the design language in P1; checked by the end-to-end page-width check (plan v11, section 六, P1) | 2027-01-31 |
+| Numbers: Supported widths (phone, laptop, wide) | not measured; `web/` holds only the first reading screen, awaiting the owner's approval | plan names 320 to 1280 px with no horizontal page scroll, 390 px for tables; confirm against the first screen (plan v11, sections 三 and 六) | 2027-01-31 |
+| Numbers: Full end-to-end run, wall time | not measured; `web/` holds only the first reading screen, awaiting the owner's approval | measure after the first end-to-end suite lands in P1 (plan v11, section 六, P1) | 2027-01-31 |
 | Numbers: Wait timeout before a stuck step is recorded and left | the owner has not set a value for this repository | the owner sets it; ask with the next batch of open questions | 2026-12-14 |
 | Numbers: Context handoff limit (share of the model's window) | the owner has not set a value for this repository | the owner sets it; ask with the next batch of open questions | 2026-12-14 |
 | Numbers: Status check interval while several jobs run | the owner has not set a value for this repository | the owner sets it; ask with the next batch of open questions | 2026-12-14 |
-| Enforcement: AGENTS.md: Frontend–backend mapping (when both exist) | no gate yet; `web/` does not exist until P1 | fill when the first `/v1` endpoint and its frontend caller exist, with the contract test from plan section 四 (plan v11, section 六, P1) | 2027-01-31 |
-| Enforcement: web/AGENTS.md: Components and modularity | no gate yet; `web/` does not exist until P1 | add the frontend gates (lint, type check, build) and the review row (plan v11, section 六, P1) | 2027-01-31 |
-| Enforcement: web/AGENTS.md: Consistency | no gate yet; `web/` does not exist until P1 | add the frontend gates and the review row (plan v11, section 六, P1) | 2027-01-31 |
-| Enforcement: web/AGENTS.md: Layout, type and loading | no gate yet; `web/` does not exist until P1 | add the screenshot and page-width checks and the review row (plan v11, section 六, P1) | 2027-01-31 |
-| Enforcement: web/AGENTS.md: i18n (if present) | no gate yet; `web/` does not exist until P1 | add the locale check for zh-CN, zh-TW and en (plan v11, section 六, P1) | 2027-01-31 |
-| Enforcement: web/AGENTS.md: Usability | no gate yet; `web/` does not exist until P1 | add the review row (plan v11, section 六, P1) | 2027-01-31 |
-| Enforcement: web/AGENTS.md: Accessibility | no gate yet; `web/` does not exist until P1 | add the accessibility check and the review row (plan v11, section 六, P1) | 2027-01-31 |
-| Enforcement: web/AGENTS.md: Performance | no gate yet; `web/` does not exist until P1 | add the route-size check from the Numbers rows above (plan v11, section 六, P1) | 2027-01-31 |
+| Enforcement: AGENTS.md: Frontend–backend mapping (when both exist) | no gate yet; `web/` holds only the first reading screen, awaiting the owner's approval | fill when the first `/v1` endpoint and its frontend caller exist, with the contract test from plan section 四 (plan v11, section 六, P1) | 2027-01-31 |
+| Enforcement: web/AGENTS.md: Consistency | no gate yet; `web/` holds only the first reading screen, awaiting the owner's approval | add the frontend gates and the review row (plan v11, section 六, P1) | 2027-01-31 |
+| Enforcement: web/AGENTS.md: Layout, type and loading | no gate yet; `web/` holds only the first reading screen, awaiting the owner's approval | add the screenshot and page-width checks and the review row (plan v11, section 六, P1) | 2027-01-31 |
+| Enforcement: web/AGENTS.md: i18n (if present) | no gate yet; `web/` holds only the first reading screen, awaiting the owner's approval | add the locale check for zh-CN, zh-TW and en (plan v11, section 六, P1) | 2027-01-31 |
+| Enforcement: web/AGENTS.md: Usability | no gate yet; `web/` holds only the first reading screen, awaiting the owner's approval | add the review row (plan v11, section 六, P1) | 2027-01-31 |
+| Enforcement: web/AGENTS.md: Accessibility | no gate yet; `web/` holds only the first reading screen, awaiting the owner's approval | add the accessibility check and the review row (plan v11, section 六, P1) | 2027-01-31 |
