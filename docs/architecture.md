@@ -230,7 +230,8 @@ fails, so no token stays in the URL.
 `pnpm build` writes `web/dist`, and `crates/wastebin_server/build.rs` embeds
 it in the executable with `include_bytes!`. Without it the build warns and
 embeds a placeholder page, so `cargo build` and `cargo test` need no Node; the
-Dockerfile sets `ZPASTE_REQUIRE_WEB=1`, which turns that into an error. The
+Dockerfile and the CI job that runs `cargo test` set `ZPASTE_REQUIRE_WEB=1`,
+which turns that into an error, so the server's tests check the real build. The
 files are served from memory, precompressed once per process; Vite's hashed
 `/assets/` files are immutable for 30 days, the others revalidate.
 
