@@ -6,6 +6,7 @@ mod content;
 #[cfg(test)]
 mod contract;
 mod error;
+mod list;
 mod model;
 mod pastes;
 #[cfg(test)]
@@ -35,7 +36,7 @@ macro_rules! v1_routes {
 
 v1_routes! {
     "/v1" { get => pastes::get_version }
-    "/v1/pastes" { get => pastes::list, post => pastes::create }
+    "/v1/pastes" { get => list::list, post => pastes::create }
     "/v1/pastes/{id}" { get => pastes::show, delete => pastes::delete }
     "/v1/pastes/{id}/content" { get => content::get_content, post => content::read_content }
 }

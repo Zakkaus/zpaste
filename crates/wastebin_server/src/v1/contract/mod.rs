@@ -45,7 +45,7 @@ pub(crate) const DOCUMENT_PATH: &str =
         crate::v1::pastes::show,
         crate::v1::pastes::delete,
         crate::v1::content::get_content,
-        crate::v1::pastes::list,
+        crate::v1::list::list,
         crate::v1::content::read_content,
     ),
     components(schemas(ErrorDocument, pending::schemas::EntityTag, pending::schemas::IfMatchList, pending::schemas::Slug, pending::schemas::EntryName)),

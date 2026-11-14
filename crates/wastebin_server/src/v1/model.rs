@@ -11,6 +11,12 @@ use utoipa::{PartialSchema, ToSchema};
 
 use wastebin_core::db::Head;
 
+mod content;
+mod list;
+
+pub(crate) use content::{ContentDocument, ContentReadRequest};
+pub(crate) use list::PasteListDocument;
+
 /// A boolean that is always the same value, schema `enum: [<value>]` (utoipa has no `const`).
 macro_rules! constant_bool {
     ($name:ident, $value:literal) => {
@@ -390,73 +396,4 @@ pub(crate) struct PasteCreate {
 #[serde(deny_unknown_fields)]
 pub(crate) struct PasteCreateRequest {
     pub paste: PasteCreate,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PasteListDocument {
-    pastes: Vec<Paste>,
-    /// Holds one `next` link while more pages exist; empty on the last page.
-    #[schema(max_items = 1, example = json!([
-        {"rel": "next", "href": "https://paste.gentoozh.org/v1/pastes?owner=me&limit=20&marker=abc123"}
-    ]))]
-    pastes_links: Vec<Link>,
-}
-
-impl PasteListDocument {
-    /// `heads` as one page; `next` is the query of the following page, when there is one.
-    pub(crate) fn new(heads: &[Head], base_url: &Url, next: Option<String>) -> Self {
-        let base = base_url.as_str().trim_end_matches('/');
-
-        Self {
-            pastes: heads
-                .iter()
-                .map(|head| Paste::new(head, base_url))
-                .collect(),
-            pastes_links: next
-                .map(|query| Link {
-                    rel: LinkRel::Next,
-                    href: format!("{base}/v1/pastes?{query}"),
-                })
-                .into_iter()
-                .collect(),
-        }
-    }
-}
-
-/// `password` for an encrypted paste, `confirm_burn: true` for a
-/// burn-after-reading paste, both in one request to consume an encrypted burn
-/// paste. See `readContent` for every combination.
-#[derive(Debug, Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ContentReadRequest {
-    #[schema(nullable = false, min_length = 1)]
-    pub password: Option<String>,
-    #[schema(inline, nullable = false)]
-    pub confirm_burn: Option<True>,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-struct Content {
-    text: String,
-    version_id: VersionId,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ContentDocument {
-    #[schema(inline)]
-    content: Content,
-}
-
-impl ContentDocument {
-    pub(crate) fn new(head: &Head, text: String) -> Self {
-        Self {
-            content: Content {
-                text,
-                version_id: VersionId(head.version_id.to_string()),
-            },
-        }
-    }
 }
