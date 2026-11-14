@@ -24,7 +24,7 @@ export const TYPE_ROLES: Record<string, string> = {
   'table cell': '.astryx-markdown td',
   'table header': '.astryx-markdown th',
   'outline label': 'aside > h2',
-  'outline entry': `nav[aria-label="${en['outline.label']}"] a`,
+  'outline entry': `nav:is([aria-label="${en['outline.label']}"], [aria-label="${en['outline.drawerNav']}"]) a`,
   button: `[role="group"][aria-label="${en['action.actions']}"] button`,
   'inline code': '.astryx-markdown-paragraph code',
   'code block': '.astryx-markdown .astryx-code-block code',

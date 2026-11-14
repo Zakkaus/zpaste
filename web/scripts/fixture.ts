@@ -4,11 +4,11 @@ import {basename, dirname, extname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {embeddedPasteElement, type EmbeddedPaste} from '../src/shell/embedded.ts';
 
-/** The committed synthetic paste; ZPASTE_FIXTURE names another Markdown file, such as a real paste kept outside the repository. */
+/** The committed synthetic paste; ZPASTE_FIXTURE, when set and not empty, names another Markdown file, such as a real paste kept outside the repository. */
 // Built from the module's path rather than `new URL(..., import.meta.url)`, which Vite (and so Vitest) rewrites as an asset URL.
 export const DEFAULT_FIXTURE = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'sample.md');
 
-export function fixturePaste(path: string = process.env.ZPASTE_FIXTURE ?? DEFAULT_FIXTURE): EmbeddedPaste {
+export function fixturePaste(path: string = process.env.ZPASTE_FIXTURE || DEFAULT_FIXTURE): EmbeddedPaste {
   const extension = extname(path).slice(1) || null;
   return embeddedPaste(basename(path, extname(path)), extension, readFileSync(path, 'utf8'));
 }

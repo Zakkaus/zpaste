@@ -14,9 +14,16 @@
 // zh-Hans with a Simplified face, and an English paste keeps the page's language. The top bar's buttons
 // share one size and icon size. On a slow link and processor with a cold cache, the top bar and the title
 // row's actions paint at their final size and place from the first frame, and the page barely shifts.
+// Copy puts the paste's exact text on the clipboard and says "Copied". The outline's landmarks have
+// distinct names and a closed drawer has none. Pastes past the render limits (renderPlan.ts) show as plain
+// text under a notice without blocking the page for long; a page with a cut-off or missing paste shows the
+// error state with a link to the raw text; Markdown images load lazily without a referrer and a blocked or
+// missing one gives way to its alt text. Every page is served with the reading page's Content Security
+// Policy, and only the image meant to be blocked breaks it.
 //
-//   node scripts/shoot.ts <out-dir>        ZPASTE_FIXTURE=<file.md> picks the paste; CHROME=<path> the browser;
-//                                          ZPASTE_DIST=<dir> another build (default web/dist).
+//   node scripts/shoot.ts <out-dir> [--ci]  ZPASTE_FIXTURE=<file.md> picks the paste; CHROME=<path> the browser
+//                                           (`bundled`: Playwright's pinned Chromium); ZPASTE_DIST=<dir> another
+//                                           build (default web/dist). --ci leaves out the checks CI does not run.
 //
 // Exit 1 when a check fails, 2 when it cannot run.
 import {createServer, type Server} from 'node:http';
@@ -25,6 +32,8 @@ import {dirname, extname, join, normalize} from 'node:path';
 import {chromium, type Browser, type Page} from '@playwright/test';
 import {THEME_ATTRIBUTE, THEME_STORAGE_KEY} from '../src/chrome/themeMode.ts';
 import {en} from '../src/i18n/en.ts';
+import {EMBEDDED_PASTE_ID} from '../src/shell/embedded.ts';
+import {MARKDOWN_LIMIT, TEXT_LIMIT} from '../src/reader/renderPlan.ts';
 import {DEFAULT_FIXTURE, embeddedPaste, fixturePaste, withEmbeddedPaste} from './fixture.ts';
 import {longMarkdown} from './longFixture.ts';
 import {TYPE_ROLES, readTypeScale} from './typeScale.ts';
@@ -50,6 +59,28 @@ const FIT_WIDTHS = [768, 1010, 1280];
 const FIT_COLUMNS = 3;
 /** Where the generated long paste is served. */
 const LONG_PATH = '/long';
+/** A 1x1 PNG, served at PIXEL as an image of the page's own origin. */
+const PIXEL = '/pixel.png';
+const PIXEL_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+/**
+ * Generated pastes past the render limits (renderPlan.ts): Markdown over MARKDOWN_LIMIT, shown whole as
+ * plain text, and a paste over TEXT_LIMIT, of which only the start is shown.
+ */
+const LARGE = [
+  {path: '/large', length: MARKDOWN_LIMIT * 3, notice: en['large.plain'].replace('{limit}', MARKDOWN_LIMIT.toLocaleString('en'))},
+  {path: '/huge', length: TEXT_LIMIT * 4, notice: en['large.truncated'].replace('{limit}', TEXT_LIMIT.toLocaleString('en'))},
+] as const;
+/** The longest task a large paste may block the page for, on SLOW_CPU. */
+const LARGE_TASK_MAX = 2000;
+/** A reading URL whose page carries a cut-off paste element, and one whose page carries none. */
+const BROKEN = [
+  {path: '/brkn01.md', element: `<script type="application/json" id="${EMBEDDED_PASTE_ID}">{"paste": {"id": "brkn01", </script>`},
+  {path: '/miss01.md', element: ''},
+] as const;
+/** A Markdown paste with an image of the page's origin, one the policy blocks and one that is missing. */
+const IMAGES_PATH = '/images';
+const BLOCKED_IMAGE = 'http://198.51.100.7/blocked.png';
+const IMAGES_MARKDOWN = `# Images\n\n![pixel](${PIXEL})\n\nText with ![blocked](${BLOCKED_IMAGE}) inline.\n\n![missing](/missing.png)\n\nThe end.\n`;
 /**
  * The committed Chinese fixtures, one note in each script with prose, a table and commented code, each
  * served at `/<name>`: the language pasteLanguage.ts gives it and the Chinese face it must be drawn with.
@@ -65,7 +96,8 @@ const TYPE_SHOTS = [
 ] as const;
 /** Line heights are fractions of the size (1.6471 of 17 px is 28.0007 px); REQUIREMENTS.md rounds them. */
 const LEADING_TOLERANCE = 0.05;
-const OUTLINE = `nav[aria-label="${en['outline.label']}"]`;
+/** The rail's outline and the drawer's, which have different names (one landmark name each). */
+const OUTLINE = `nav:is([aria-label="${en['outline.label']}"], [aria-label="${en['outline.drawerNav']}"])`;
 const COPY = `[role="group"][aria-label="${en['action.actions']}"] button`;
 /** The paste's text, marked with its own language (ReaderPage). */
 const CONTENT = 'div:has(> .astryx-markdown, > .astryx-code-block)';
@@ -82,10 +114,41 @@ const CLS_MAX = 0.01;
 /** The controls that must paint at their final size and place: the top bar's and the title row's. */
 const STEADY_CONTROLS = `[role="banner"] :is(button, a), [role="group"][aria-label="${en['action.actions']}"] > *`;
 
-/** Serves `pages[path]` for each page path (`/` and LONG_PATH) and dist/ for the rest. */
+/**
+ * The reading page's Content Security Policy (docs/architecture.md, invariant 17), served with every
+ * page, with a report address so that every violation reaches this script. Styles also allow inline
+ * `<style>` elements: Astryx inserts two at run time (CodeBlock's highlight colours and the layer slide
+ * rules), which upstream's `style-src 'self' data:` blocks; how the shell admits them is open
+ * (docs/architecture.md, "Open items", A13).
+ */
+const CSP =
+  "default-src 'none'; script-src 'self'; img-src 'self' https: data:; style-src 'self' data: 'unsafe-inline'; font-src 'self' data:; " +
+  "connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; report-uri /csp-report";
+/** What the policy blocked: the page's path and the blocked address. */
+const violations: {page: string; blocked: string}[] = [];
+
+/** Serves `pages[path]` for each page path, PIXEL, the policy's reports and dist/ for the rest. */
 function serve(pages: Record<string, string>): Promise<Server> {
   const server = createServer((request, response) => {
     const path = normalize(new URL(request.url ?? '/', 'http://x').pathname);
+    if (path === '/csp-report') {
+      let body = '';
+      request.on('data', (chunk: Buffer) => (body += chunk.toString()));
+      request.on('end', () => {
+        try {
+          const report = (JSON.parse(body) as {'csp-report': Record<string, string>})['csp-report'] ?? {};
+          violations.push({page: new URL(report['document-uri'] ?? 'http://x/?').pathname, blocked: report['blocked-uri'] ?? ''});
+        } catch {
+          violations.push({page: '?', blocked: body.slice(0, 200)});
+        }
+        response.writeHead(204).end();
+      });
+      return;
+    }
+    if (path === PIXEL) {
+      response.writeHead(200, {'content-type': 'image/png'}).end(PIXEL_PNG);
+      return;
+    }
     if (pages[path] == null) {
       try {
         const body = readFileSync(join(DIST, path));
@@ -97,9 +160,14 @@ function serve(pages: Record<string, string>): Promise<Server> {
     }
     const page = pages[path];
     if (page == null) response.writeHead(404).end();
-    else response.writeHead(200, {'content-type': 'text/html; charset=utf-8'}).end(page);
+    else response.writeHead(200, {'content-type': 'text/html; charset=utf-8', 'content-security-policy': CSP}).end(page);
   });
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+/** `text` repeated, then cut to `length` characters. */
+function repeatedTo(text: string, length: number): string {
+  return text.repeat(Math.ceil(length / text.length)).slice(0, length);
 }
 
 const failures: string[] = [];
@@ -181,11 +249,45 @@ function scrollPast(page: Page, id: string): Promise<void> {
   }, id);
 }
 
+/**
+ * Where the page ends: whether it is scrolled to its end, whether heading `id` sits below the line a
+ * jump to it lands on (the page ran out before it got there) while still on screen, and the last
+ * heading the outline can list that is on screen.
+ */
+function pageEnd(page: Page, id: string): Promise<{atEnd: boolean; shortOf: boolean; lastOnScreen: string}> {
+  return page.evaluate(target => {
+    const headings = [...document.querySelectorAll<HTMLElement>('.astryx-markdown :is(h2, h3, h4, h5)[id]')];
+    const onScreen = headings.filter(heading => {
+      const box = heading.getBoundingClientRect();
+      return box.bottom > 0 && box.top < window.innerHeight;
+    });
+    const heading = document.getElementById(target);
+    const top = heading?.getBoundingClientRect().top ?? NaN;
+    return {
+      atEnd: window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 1,
+      shortOf: heading != null && top > parseFloat(getComputedStyle(heading).scrollMarginTop) + 1 && top < window.innerHeight,
+      lastOnScreen: onScreen.at(-1)?.id ?? '',
+    };
+  }, id);
+}
+
+/**
+ * The section `expected` is on screen and every outline marks it. At the page's end a short last part
+ * cannot scroll its heading up to the landing line; there the heading must be on screen, and an outline
+ * may mark it (the entry the reader chose) or the last section on screen, which Outline marks once the
+ * page can scroll no further.
+ */
 async function checkCurrent(page: Page, label: string, expected: string) {
   await settle(page);
+  const current = await currentEntries(page);
+  const end = await pageEnd(page, expected);
+  if (end.atEnd && end.shortOf) {
+    const allowed = [expected, end.lastOnScreen];
+    check(current.length > 0 && current.every(id => id != null && allowed.includes(id)), `${label}: at the page's end the outline marks ${JSON.stringify(current)}, expected #${expected} or the last section on screen #${end.lastOnScreen}`);
+    return;
+  }
   const onScreen = await sectionOnScreen(page);
   check(onScreen === expected, `${label}: the section on screen is #${onScreen}, expected #${expected}`);
-  const current = await currentEntries(page);
   check(current.length > 0 && current.every(id => id === onScreen), `${label}: the outline marks ${JSON.stringify(current)}, the section on screen is #${onScreen}`);
 }
 
@@ -465,9 +567,11 @@ async function checkTheme(browser: Browser, url: string, out: string) {
 
 /**
  * The title row's actions are one set: every button has the same height and top edge within its row
- * (rows may wrap on a phone), and Copy keeps its width when its label turns into its feedback.
+ * (rows may wrap on a phone), and Copy keeps its width when its label turns into its feedback. Copy
+ * succeeds: its name turns to "Copied" and the clipboard holds the paste's text exactly (the context
+ * grants clipboard access).
  */
-async function checkActions(page: Page, name: string, wide: boolean) {
+async function checkActions(page: Page, name: string, wide: boolean, text: string) {
   const group = page.locator(`[role="group"][aria-label="${en['action.actions']}"]`);
   const boxes = await group.locator(':scope > *').evaluateAll(elements =>
     elements.map(element => {
@@ -483,9 +587,13 @@ async function checkActions(page: Page, name: string, wide: boolean) {
   check(rows.size <= (wide ? 1 : 2), `${name}: the actions sit at tops ${JSON.stringify(boxes.map(box => [box.text, box.top]))}`);
   const copy = group.locator('button').first();
   const before = await copy.evaluate(button => button.getBoundingClientRect().width);
+  await page.evaluate(() => navigator.clipboard.writeText(''));
   await copy.click();
   await page.waitForFunction(([selector, label]) => document.querySelector(selector)?.getAttribute('aria-label') !== label, [COPY, en['action.copy']] as const);
   const after = await copy.evaluate(button => [button.getBoundingClientRect().width, button.getAttribute('aria-label')] as const);
+  check(after[1] === en['action.copied'], `${name}: Copy turned into "${after[1]}", expected "${en['action.copied']}"`);
+  const copied = await page.evaluate(() => navigator.clipboard.readText());
+  check(copied === text, `${name}: the clipboard holds ${copied.length} characters, not the paste's ${text.length}`);
   check(Math.abs(after[0] - before) < 0.5, `${name}: Copy is ${before} px wide and ${after[0]} px as "${after[1]}"`);
   console.log(`${name}: ${boxes.length} actions ${[...heights].join('/')} px high in ${rows.size} row(s); Copy ${Math.round(before)} px as "Copy" and as "${after[1]}"`);
 }
@@ -799,10 +907,130 @@ async function checkLongPaste(browser: Browser, url: string, out: string) {
   await phone.close();
 }
 
+/**
+ * The navigation landmarks of the outline that are rendered, and so in the accessibility tree: the
+ * rail's on a wide screen, none on a phone while the drawer is closed (a closed dialog is not rendered),
+ * the drawer's while it is open. The two have different names, so a list of landmarks tells them apart.
+ * Read from the DOM: Playwright's accessibility snapshot of a long page left the open drawer deaf to Escape.
+ */
+async function checkLandmarks(page: Page, label: string, expected: string[]) {
+  const found = await page.evaluate(
+    selector => [...document.querySelectorAll(selector)].filter(nav => nav.checkVisibility()).map(nav => nav.getAttribute('aria-label') ?? ''),
+    OUTLINE,
+  );
+  check(JSON.stringify(found) === JSON.stringify(expected), `${label}: the outline landmarks are ${JSON.stringify(found)}, expected ${JSON.stringify(expected)}`);
+}
+
+/**
+ * A paste past a render limit is shown as plain text under its notice, with no Markdown, no outline and
+ * the Raw and Download actions; the page fits 390 px; and on SLOW_CPU no task blocks the page longer
+ * than LARGE_TASK_MAX, page parsing included.
+ */
+async function checkLargePastes(browser: Browser, url: string) {
+  for (const large of LARGE) {
+    const name = `large ${large.path}`;
+    const context = await browser.newContext({viewport: {width: 1280, height: 800}});
+    await context.addInitScript(() => {
+      const tasks: number[] = [];
+      new PerformanceObserver(list => tasks.push(...list.getEntries().map(entry => entry.duration))).observe({type: 'longtask', buffered: true});
+      Object.assign(window, {zpasteTasks: tasks});
+    });
+    const page = await context.newPage();
+    page.on('pageerror', error => failures.push(`${name}: page error: ${error.message}`));
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Emulation.setCPUThrottlingRate', {rate: SLOW_CPU});
+    await page.goto(`${url.slice(0, -1)}${large.path}`, {waitUntil: 'load', timeout: 120_000});
+    await page.locator('h1').waitFor();
+    await settle(page);
+    const longest = await page.evaluate(() => Math.max(0, ...(window as unknown as {zpasteTasks: number[]}).zpasteTasks));
+    await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
+    const state = await page.evaluate(
+      ([notice, outline]) => ({
+        notice: [...document.querySelectorAll('body *')].some(element => element.children.length === 0 && element.textContent === notice),
+        markdown: document.querySelectorAll('.astryx-markdown').length,
+        code: document.querySelectorAll('.astryx-code-block').length,
+        outlines: document.querySelectorAll(outline).length,
+      }),
+      [large.notice, OUTLINE] as const,
+    );
+    check(state.notice, `${name}: no notice says "${large.notice}"`);
+    check(state.markdown === 0 && state.code === 1, `${name}: ${state.markdown} Markdown and ${state.code} plain-text views, expected plain text only`);
+    check(state.outlines === 0, `${name}: ${state.outlines} outlines for a paste shown as plain text`);
+    for (const action of [en['action.raw'], en['action.download']]) {
+      check((await page.getByRole('link', {name: action, exact: true}).count()) === 1, `${name}: no ${action} action`);
+    }
+    check((await page.getByRole('button', {name: en['outline.open'], exact: true}).count()) === 0, `${name}: an outline button for a paste shown as plain text`);
+    check(longest < LARGE_TASK_MAX, `${name}: a task blocks the page for ${Math.round(longest)} ms at ${SLOW_CPU}x CPU, over ${LARGE_TASK_MAX} ms`);
+    await page.setViewportSize({width: 390, height: 844});
+    const overflow = await pageOverflow(page);
+    check(overflow <= 0, `${name} 390px: the page scrolls sideways by ${overflow}px`);
+    console.log(`${name}: ${large.length.toLocaleString('en')} characters shown as plain text; longest task ${Math.round(longest)} ms at ${SLOW_CPU}x CPU`);
+    await context.close();
+  }
+}
+
+/** A page whose paste element is cut off or missing shows the error state with a link to the raw text. */
+async function checkErrorPages(browser: Browser, url: string) {
+  for (const broken of BROKEN) {
+    const name = `error ${broken.path}`;
+    const context = await browser.newContext({viewport: {width: 390, height: 844}});
+    const page = await context.newPage();
+    page.on('pageerror', error => failures.push(`${name}: page error: ${error.message}`));
+    await page.goto(`${url.slice(0, -1)}${broken.path}`, {waitUntil: 'networkidle'});
+    const title = await page.locator('h1').allTextContents();
+    check(JSON.stringify(title) === JSON.stringify([en['error.title']]), `${name}: the page title is ${JSON.stringify(title)}, expected "${en['error.title']}"`);
+    const raw = await page.getByRole('link', {name: en['error.openRaw'], exact: true}).getAttribute('href');
+    const id = broken.path.slice(1, broken.path.indexOf('.'));
+    check(raw === `/raw/${id}`, `${name}: the raw link is ${raw}, expected /raw/${id}`);
+    await context.close();
+  }
+}
+
+/**
+ * An image of the page's origin loads lazily and sends no referrer; one the policy blocks and one that
+ * is missing give way to their alt text in brackets; the page does not scroll sideways at 320 px.
+ */
+async function checkImages(browser: Browser, url: string, out: string) {
+  const context = await browser.newContext({viewport: {width: 320, height: 844}, deviceScaleFactor: 2});
+  const page = await context.newPage();
+  page.on('pageerror', error => failures.push(`images: page error: ${error.message}`));
+  await page.goto(`${url.slice(0, -1)}${IMAGES_PATH}`, {waitUntil: 'networkidle'});
+  await settle(page);
+  const images = await page.evaluate(() =>
+    [...document.querySelectorAll<HTMLImageElement>('.astryx-markdown img')].map(image => ({
+      src: image.getAttribute('src'),
+      loaded: image.complete && image.naturalWidth > 0,
+      referrer: image.referrerPolicy,
+      loading: image.loading,
+    })),
+  );
+  const text = await page.locator('.astryx-markdown').innerText();
+  check(images.length === 1 && images[0]?.src === PIXEL && images[0].loaded, `images: expected only ${PIXEL}, loaded; found ${JSON.stringify(images)}`);
+  check(images.every(image => image.referrer === 'no-referrer' && image.loading === 'lazy'), `images: an image loads eagerly or sends a referrer ${JSON.stringify(images)}`);
+  for (const alt of ['[blocked]', '[missing]']) check(text.includes(alt), `images: the alt text ${alt} does not replace its image`);
+  const overflow = await pageOverflow(page);
+  check(overflow <= 0, `images 320px: the page scrolls sideways by ${overflow}px`);
+  await page.screenshot({path: join(out, '320-light-images.png')});
+  console.log(`images: ${JSON.stringify(images)}; alt text shown for the blocked and the missing image`);
+  await context.close();
+}
+
+/** Only the image IMAGES_PATH means to be blocked broke the policy. */
+function checkViolations() {
+  const expected = violations.filter(violation => violation.page === IMAGES_PATH && violation.blocked === BLOCKED_IMAGE);
+  check(expected.length > 0, `policy: the image ${BLOCKED_IMAGE} was not blocked`);
+  const other = violations.filter(violation => !expected.includes(violation));
+  check(other.length === 0, `policy: the pages broke the Content Security Policy ${JSON.stringify(other)}`);
+  console.log(`policy: ${violations.length} violation report(s), ${other.length} unexpected`);
+}
+
 async function main() {
   const out = process.argv[2];
-  if (out == null) {
-    console.error('usage: node scripts/shoot.ts <out-dir>');
+  // CI leaves out the first-paint check: it emulates a slow link and processor, takes a minute of the
+  // job and depends on the runner's timing; run it locally before review (REQUIREMENTS.md, "Numbers").
+  const ci = process.argv.includes('--ci');
+  if (out == null || out.startsWith('--')) {
+    console.error('usage: node scripts/shoot.ts <out-dir> [--ci]');
     process.exit(2);
   }
   mkdirSync(out, {recursive: true});
@@ -810,14 +1038,24 @@ async function main() {
   const server = await serve({
     '/': withEmbeddedPaste(shell, fixturePaste()),
     [LONG_PATH]: withEmbeddedPaste(shell, embeddedPaste('long', 'md', longMarkdown())),
+    ...Object.fromEntries(LARGE.map(large => [large.path, withEmbeddedPaste(shell, embeddedPaste(large.path.slice(1), 'md', repeatedTo(longMarkdown(), large.length)))])),
+    ...Object.fromEntries(BROKEN.map(broken => [broken.path, shell.replace('<div id="root"></div>', `${broken.element}<div id="root"></div>`)])),
+    [IMAGES_PATH]: withEmbeddedPaste(shell, embeddedPaste('images', 'md', IMAGES_MARKDOWN)),
     ...Object.fromEntries(CHINESE.map(fixture => [`/${fixture.name}`, withEmbeddedPaste(shell, fixturePaste(join(dirname(DEFAULT_FIXTURE), fixture.file)))])),
   });
   const address = server.address();
   const url = typeof address === 'object' && address != null ? `http://127.0.0.1:${address.port}/` : '';
-  const browser = await chromium.launch({executablePath: process.env.CHROME ?? '/usr/bin/google-chrome-stable'});
+  // CHROME=bundled runs the Chromium build pinned by @playwright/test (`playwright install chromium`), as CI does.
+  const chrome = process.env.CHROME ?? '/usr/bin/google-chrome-stable';
+  const browser = await chromium.launch({executablePath: chrome === 'bundled' ? undefined : chrome});
   try {
     for (const shot of SHOTS) {
-      const context = await browser.newContext({viewport: {width: shot.width, height: shot.height}, colorScheme: shot.scheme, deviceScaleFactor: 2});
+      const context = await browser.newContext({
+        viewport: {width: shot.width, height: shot.height},
+        colorScheme: shot.scheme,
+        deviceScaleFactor: 2,
+        permissions: ['clipboard-read', 'clipboard-write'],
+      });
       const page = await context.newPage();
       page.on('pageerror', error => failures.push(`${shot.name}: page error: ${error.message}`));
       await page.goto(url, {waitUntil: 'networkidle'});
@@ -828,6 +1066,7 @@ async function main() {
       const wide = shot.width >= 1024;
       await page.screenshot({path: join(out, `${shot.name}-header.png`), clip: {x: 0, y: 0, width: shot.width, height: wide ? HEADER_HEIGHT.wide : HEADER_HEIGHT.narrow}});
       await checkTopBar(page, shot.name, wide);
+      await checkLandmarks(page, shot.name, wide ? [en['outline.label']] : []);
 
       const table = page.locator('.astryx-markdown table').first();
       if ((await table.count()) > 0) {
@@ -859,6 +1098,7 @@ async function main() {
         await page.waitForTimeout(400);
         // Focus moves into the drawer as it opens and back to its button as it closes.
         check(await drawer.evaluate(dialog => dialog.contains(document.activeElement)), `${shot.name}: focus did not move into the outline drawer`);
+        await checkLandmarks(page, `${shot.name} with the drawer open`, [en['outline.drawerNav']]);
         await checkCurrent(page, `${shot.name} with the drawer open at the top`, await outlineEntry(page, 0));
         await page.screenshot({path: join(out, `${shot.name}-outline.png`)});
         await page.keyboard.press('Escape');
@@ -880,7 +1120,7 @@ async function main() {
         await checkCurrent(page, `${shot.name} after clicking the drawer entry #${target}`, target);
         await page.screenshot({path: join(out, `${shot.name}-outline-jump.png`)});
       }
-      await checkActions(page, shot.name, wide);
+      await checkActions(page, shot.name, wide, fixturePaste().content);
       await context.close();
     }
 
@@ -891,13 +1131,19 @@ async function main() {
       faces.push(await checkChineseFace(browser, `${url}${fixture.name}`, fixture));
     }
     check(new Set(faces).size === faces.length, `the Chinese fixtures share the face ${faces.join(' / ')}`);
-    if (process.env.ZPASTE_FIXTURE == null) await checkNoLanguage(browser, url, fixturePaste().paste.id);
+    if (!process.env.ZPASTE_FIXTURE) await checkNoLanguage(browser, url, fixturePaste().paste.id);
     await checkTheme(browser, url, out);
-    await checkFirstPaint(browser, url);
+    if (!ci) await checkFirstPaint(browser, url);
     await checkWidthsAndTables(browser, url, fixturePaste().paste.id);
     const long = `${url.slice(0, -1)}${LONG_PATH}`;
     await checkWidthsAndTables(browser, long, 'long');
     await checkLongPaste(browser, long, out);
+    await checkLargePastes(browser, url);
+    await checkErrorPages(browser, url);
+    await checkImages(browser, url, out);
+    // Reports reach the server shortly after the violation.
+    await new Promise(resolve => setTimeout(resolve, 500));
+    checkViolations();
   } finally {
     await browser.close();
     server.close();
