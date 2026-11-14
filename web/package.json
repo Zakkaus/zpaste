@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "lint": "eslint .",
+    "lint": "eslint . && node scripts/lint-css.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "check:size": "node scripts/check-size.ts",

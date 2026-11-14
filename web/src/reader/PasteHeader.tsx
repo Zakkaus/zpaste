@@ -9,12 +9,13 @@ import {Timestamp} from '@astryxdesign/core/Timestamp';
 import {BUTTON, SPACE} from '@gentoozh/astryx-theme/scale';
 import type {EmbeddedPaste} from '../shell/embedded';
 import {t} from '../i18n/messages';
+import {layout} from '../theme/layout.stylex';
 import {languageName} from './languages';
 
 const styles = stylex.create({
   wrap: {flexWrap: 'wrap'},
   // The title row shrinks before the actions do, and a long title wraps instead of widening the page.
-  title: {flexBasis: 0, flexGrow: 1, minWidth: 'min(100%, 16rem)', overflowWrap: 'anywhere'},
+  title: {flexBasis: 0, flexGrow: 1, minWidth: layout.titleMinWidth, overflowWrap: 'anywhere'},
   // The page's h1 in the section-heading role: one step above body text, one below the paste's own
   // first heading, which carries the page (docs/design-language.md, "Positioning").
   heading: {

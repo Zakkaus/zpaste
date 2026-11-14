@@ -1,9 +1,11 @@
-// Gates for web/AGENTS.md, "Components and modularity": no literal colour or pixel value outside
-// src/theme/, and no visible text outside the locale catalogues.
+// Gates for web/AGENTS.md, "Components and modularity": no literal colour or size outside src/theme/
+// (scripts/rawValue.ts; scripts/lint-css.ts checks the stylesheets), and no visible text outside the
+// locale catalogues.
 import reactHooks from 'eslint-plugin-react-hooks';
 import tseslint from 'typescript-eslint';
+import {RAW_VALUE as RAW} from './scripts/rawValue.ts';
 
-const RAW_VALUE = String.raw`/#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|oklch)\(|\b\d+(?:\.\d+)?px\b/`;
+const RAW_VALUE = `/${RAW.source}/`;
 const TEXT = String.raw`/\p{L}/u`;
 
 export default tseslint.config(

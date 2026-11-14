@@ -132,8 +132,10 @@
 .body :global(.astryx-table-scroll-wrapper) {
   container-type: inline-size;
 }
-@media (max-width: 640px) {
+/* literal-ok: the theme's phone breakpoint (gentoo.css `width < 640px`); a media query reads no custom property */
+@media (width < 640px) {
   .body :global(.astryx-table-scroll-wrapper) :is(th, td):first-child {
+    /* literal-ok: half the table's box is the cap itself (REQUIREMENTS.md, "Exceptions") */
     --_first-column-cap: calc(50cqi - var(--spacing-2));
     position: sticky;
     inset-inline-start: 0;
@@ -154,6 +156,7 @@
  * and hides it once the last column is in view, or when nothing overflows.
  */
 .body :global(.astryx-table-scroll-wrapper) {
+  /* literal-ok: the gradients' geometry: full height, centred on the box's end edge */
   background:
     linear-gradient(var(--color-background-surface), var(--color-background-surface)) right / var(--spacing-3) 100% no-repeat local,
     radial-gradient(farthest-side at 100% 50%, var(--color-overlay-pressed), transparent) right / var(--spacing-3) 100% no-repeat scroll;

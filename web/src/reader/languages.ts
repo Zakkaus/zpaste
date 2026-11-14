@@ -9,8 +9,11 @@ export function pasteExtension(urlExtension: string | null, storedExtension: str
   return urlExtension ?? storedExtension;
 }
 
+/** Extensions the Markdown renderer draws. */
+const MARKDOWN = new Set(['md', 'markdown']);
+
 export function isMarkdown(extension: string | null): boolean {
-  return extension != null && NAMES[extension.toLowerCase()] === 'Markdown';
+  return extension != null && MARKDOWN.has(extension.toLowerCase());
 }
 
 /** The name shown in the metadata row: a known name, the extension as written, or null for plain text. */
