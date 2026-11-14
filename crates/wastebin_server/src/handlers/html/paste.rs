@@ -18,8 +18,8 @@ use crate::web::WEB;
 use crate::web::shell::{self, Embedded, PasteMeta, Reading};
 use crate::{AppState, Cache, Database, Highlighter, Page};
 use wastebin_core::crypto::Password;
-use wastebin_core::db;
 use wastebin_core::db::read::{Data, Entry, Metadata};
+use wastebin_core::db::{self, Head};
 use wastebin_core::expiration::Expiration;
 
 /// Magic-link handoff: when a paste was created via the JSON API, the response contains a signed
@@ -32,8 +32,10 @@ pub(crate) struct OwnerHandoff {
 }
 
 /// The reading page `/<id>[.<ext>]`: the web app's HTML shell (docs/architecture.md, "Serving a
-/// page"). It never consumes a paste and never derives a key; an encrypted or burn-after-reading
-/// paste's page carries nothing of it.
+/// page"). It never consumes a paste and never derives a key. An encrypted or burn-after-reading
+/// paste gets upstream's password or burn-confirmation form instead, which carries nothing of it
+/// either (open item A5).
+#[expect(clippy::too_many_arguments)]
 pub async fn get(
     State(state): State<AppState>,
     Path(path): Path<String>,
@@ -41,6 +43,8 @@ pub async fn get(
     jar: SignedCookieJar,
     uids: Option<Uids>,
     headers: HeaderMap,
+    theme: Option<Theme>,
+    lang: Lang,
 ) -> Response {
     let key = path.parse::<Key>().ok();
 
@@ -81,7 +85,7 @@ pub async fn get(
         }
     };
     let Some(text) = text else {
-        return reading_page(&state, StatusCode::OK, &Reading::Sealed, &path);
+        return sealed_form(&state.page, &key, &head, theme, lang);
     };
 
     // The owner's credentials only show the Edit action; every write is checked on its own. A
@@ -104,6 +108,33 @@ pub async fn rendered(Path(path): Path<String>) -> Response {
     match path.parse::<Key>() {
         Ok(key) => found(&format!("/{key}")),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// The form a sealed paste's page shows until the web app has its own password and
+/// burn-confirmation screens: a burn-after-reading paste, encrypted or not, asks for confirmation
+/// first, an encrypted one for its password. Both post back to the paste (`post`), and neither
+/// shows the paste's title (invariant 4).
+fn sealed_form(page: &Page, key: &Key, head: &Head, theme: Option<Theme>, lang: Lang) -> Response {
+    let action = FormAction::source(key);
+    if head.burn_after_reading {
+        BurnConfirmation {
+            page: page.clone(),
+            theme,
+            lang,
+            title: None,
+            action,
+        }
+        .into_response()
+    } else {
+        PasswordInput {
+            page: page.clone(),
+            theme,
+            lang,
+            action,
+        }
+        .into_response()
+        .no_store()
     }
 }
 

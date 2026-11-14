@@ -42,9 +42,6 @@ impl Template {
 pub(crate) enum Reading<'a> {
     /// No paste: the id is missing, expired or not an id. The app shows its error state.
     Missing,
-    /// An encrypted or burn-after-reading paste: nothing of it, not even its title, is in the page
-    /// (invariant 4).
-    Sealed,
     /// An ordinary paste, embedded whole.
     Plain(Embedded<'a>),
 }
@@ -103,7 +100,7 @@ pub(crate) fn render(
     let site = escape(site);
 
     match reading {
-        Reading::Missing | Reading::Sealed => {
+        Reading::Missing => {
             let _ = write!(head, "<title>{site}</title>");
             let _ = write!(
                 head,

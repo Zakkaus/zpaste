@@ -31,7 +31,7 @@ what fails when it is broken, so a change can be judged against it.
 | 1 | The `/v1` handlers and the legacy routes call the same service functions. A legacy route is an adapter that translates the request and the response, nothing more. | Two entry points grow two sets of rules, and an anonymous `curl` gets behaviour the web page does not. | Target, P1 |
 | 2 | `WASTEBIN_SIGNING_KEY` and `WASTEBIN_PASSWORD_SALT` carry over unchanged across every deployment, including the upstream default salt `somesalt` when none was set. | Every owner token stops verifying, and every encrypted paste becomes unreadable. | Current (upstream reads both); kept by the runbook |
 | 3 | A burn-after-reading paste is consumed only by `POST /v1/pastes/{id}/content` with `confirm_burn`. No `GET` consumes content. | A link preview, a crawler or a page reload burns the paste before the reader sees it. | Target, P1 |
-| 4 | The HTML shell of an encrypted or burn-after-reading paste carries no content, no title and no summary. | The content or its title reaches link previews, caches and anyone with the URL. | Current (P1 slice 4, `web::tests`) |
+| 4 | The page `GET /<id>` serves for an encrypted or burn-after-reading paste carries no content, no title and no summary. | The content or its title reaches link previews, caches and anyone with the URL. | Current (P1 slice 4, `web::tests`) |
 | 5 | Content embedded in the HTML shell is JSON with `<`, `>`, `&`, U+2028 and U+2029 escaped; Open Graph attributes and `<noscript>` text use HTML escaping; the Content Security Policy allows no inline script. | A paste containing `</script>` ends the data block early and runs as script on the paste's origin. | Current (P1 slice 4, `web::shell::tests`) |
 | 6 | A version id is a SHA-256 over the parent id, the stored bytes (the ciphertext for an encrypted paste) and the title (presence flag, length and bytes). | Someone without the password confirms a guessed plaintext by hashing it, or an `ETag` matches content it does not describe. | Target, P1 |
 | 7 | Editing an encrypted paste first decrypts the current content with the supplied password; a failure returns 401 and writes nothing. | A mistyped password silently becomes the paste's new password. | Target, P2 |
@@ -211,11 +211,15 @@ without a Markdown heading's `#`; the summary is the next four non-blank
 lines; both are cut at 80 and 200 characters. The `<noscript>` text wraps by a
 hashed stylesheet, so it does not scroll sideways either.
 
-Encrypted and burn-after-reading pastes get a shell with the site name as
-title and no content (invariant 4); the shell reads only their flags, never
-their bytes. They cannot be read without JavaScript. Until the app has the
-password and burn screens, such a page shows its missing state with the raw
-link. A missing, expired or malformed id gets the same shell with 404 (A4).
+Until the app has its password and burn screens (P1 frontend), an encrypted
+or burn-after-reading paste does not get the shell: `GET /<id>` serves
+upstream's HTML form, which posts back to `POST /<id>` (A5). A
+burn-after-reading paste, encrypted or not, gets the burn confirmation, and
+nothing is consumed until the reader confirms; an encrypted one gets the
+password form, with `no-store`. Neither form shows the paste's title
+(invariant 4), and the page reads only the paste's flags, never its bytes.
+The app's screens replace these forms when they land. A missing, expired or
+malformed id gets the shell with no paste and 404 (A4).
 Pastes are served with `noindex`; the help page on gentoozh.org stays
 indexable.
 
@@ -290,8 +294,10 @@ notice, with no outline (`web/src/reader/renderPlan.ts`): Markdown past
 and Download for the whole paste. The shell embeds the whole content at any
 size: the app has no other way to get it yet, and `WASTEBIN_MAX_BODY_SIZE`
 bounds it. A page whose embedded paste is missing or
-cannot be parsed, or whose rendering throws, shows an error screen with a
-link to `/raw/<id>` instead of a blank page.
+cannot be parsed, or whose rendering throws, shows an error screen instead of
+a blank page. It links `/raw/<id>` only when the page carried the paste, which
+the shell embeds for an ordinary paste alone: with nothing embedded the paste
+may be gone or burn-after-reading, and `GET /raw/<id>` consumes the latter.
 
 ## API layer
 
@@ -475,8 +481,8 @@ Target, P1:
 | `POST /`, `/raw/<id>`, `DELETE /<id>` | Thin adapters over the `/v1` services (invariant 1). One set of scenario tests runs against both paths. Current for `POST /`, `POST /new`, `/raw/<id>` and `/dl/<id>`: they call `crates/wastebin_server/src/service.rs`, as `/v1` does, and keep upstream's statuses (403 for a wrong password, the HTML password form for a missing one); `/raw` and `/dl` consume a burn paste on read, as upstream did. `v1::tests::legacy` runs the scenarios through every create route and every read route: `/raw`, `/dl`, the HTML page and `/v1`. |
 | `/md/<id>.<ext>` | 302 to `/<id>.<ext>`. Current: the upstream view, its `POST` forms and its `img-src *` are removed. |
 | `/burn`, `/dl`, `/qr` | Kept. |
-| `GET /<id>[.<ext>]` | The HTML shell. Current. |
-| `POST /{id}` | Open. Today it takes the password and burn confirmation from upstream's HTML form, which `/raw/<id>` and this route show; the app uses `POST /v1/pastes/{id}/content` instead. |
+| `GET /<id>[.<ext>]` | The HTML shell. Current for ordinary and missing pastes; an encrypted or burn-after-reading paste gets upstream's form until the app's screens land (see "Serving a page"). |
+| `POST /{id}` | Open. Today it takes the password and burn confirmation from upstream's HTML form, which `GET /<id>` of a sealed paste, `/raw/<id>` and this route show; the app uses `POST /v1/pastes/{id}/content` instead, once its own screens replace the form. |
 | `POST /new`, `POST /delete/{id}`, `/theme` | Open. They serve upstream's HTML forms, which are removed. |
 
 The upstream askama templates, CSS and JavaScript are removed when the shell

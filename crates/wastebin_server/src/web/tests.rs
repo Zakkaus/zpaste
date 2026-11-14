@@ -160,8 +160,10 @@ async fn titled_paste_previews_its_title() {
     assert_eq!(embedded(&body).unwrap()["paste"]["title"], "Notes <1>");
 }
 
+/// Until the web app has its own screens for them, a sealed paste's page is upstream's form
+/// (open item A5).
 #[tokio::test]
-async fn sealed_pastes_carry_nothing_and_are_not_consumed() {
+async fn sealed_pastes_get_their_form_and_are_not_consumed() {
     let client = Client::new(StoreCookies(false)).await;
     let (burn, _) = create(
         &client,
@@ -173,16 +175,35 @@ async fn sealed_pastes_carry_nothing_and_are_not_consumed() {
         json!({"content": "locked-body-xyz", "title": "locked-title-xyz", "password": "pw"}),
     )
     .await;
+    let (both, _) = create(
+        &client,
+        json!({"content": "both-body-xyz", "title": "both-title-xyz", "password": "pw",
+               "burn_after_reading": true}),
+    )
+    .await;
 
-    for id in [&burn, &locked, &burn] {
+    for (id, confirm) in [
+        (&burn, true),
+        (&locked, false),
+        (&both, true),
+        (&burn, true),
+    ] {
         let res = page(&client, &format!("/{id}"), None).await;
         assert_eq!(res.status(), StatusCode::OK);
+        let cache_control = res.headers().get(header::CACHE_CONTROL).cloned();
         let body = res.text().await.unwrap();
+        assert!(body.contains(&format!("action=\"/{id}\"")), "{body}");
+        if confirm {
+            assert!(body.contains("name=\"confirm_burn\" value=\"1\""), "{body}");
+            assert!(!body.contains("name=\"password\""), "{body}");
+        } else {
+            assert!(body.contains("name=\"password\""), "{body}");
+            assert_eq!(cache_control.unwrap(), "no-store");
+        }
         // Invariant 4: no content, no title and no summary.
         assert!(!body.contains("-xyz"), "{body}");
         assert!(embedded(&body).is_none(), "{body}");
         assert!(meta(&body, "og:description").is_none(), "{body}");
-        assert_eq!(meta(&body, "og:title"), Some("test"));
     }
 
     // Invariant 3: the burn paste is still there until the reader confirms.

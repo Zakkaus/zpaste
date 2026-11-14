@@ -91,8 +91,8 @@ const LARGE = [
 const LARGE_TASK_MAX = 2000;
 /** A reading URL whose page carries a cut-off paste element, and one whose page carries none. */
 const BROKEN = [
-  {path: '/brkn01.md', element: `<script type="application/json" id="${EMBEDDED_PASTE_ID}">{"paste": {"id": "brkn01", </script>`},
-  {path: '/miss01.md', element: ''},
+  {path: '/brkn01.md', element: `<script type="application/json" id="${EMBEDDED_PASTE_ID}">{"paste": {"id": "brkn01", </script>`, raw: true},
+  {path: '/miss01.md', element: '', raw: false},
 ] as const;
 /** A Markdown paste with an image of the page's origin, one the policy blocks and one that is missing. */
 const IMAGES_PATH = '/images';
@@ -1045,7 +1045,11 @@ async function checkLargePastes(browser: Browser, url: string) {
   }
 }
 
-/** A page whose paste element is cut off or missing shows the error state with a link to the raw text. */
+/**
+ * A page whose paste element is cut off or missing shows the error state. Only the cut-off one, whose
+ * paste the server embedded and so is ordinary, links the raw text: `GET /raw/<id>` consumes a
+ * burn-after-reading paste.
+ */
 async function checkErrorPages(browser: Browser, url: string) {
   for (const broken of BROKEN) {
     const name = `error ${broken.path}`;
@@ -1055,9 +1059,11 @@ async function checkErrorPages(browser: Browser, url: string) {
     await page.goto(`${url.slice(0, -1)}${broken.path}`, {waitUntil: 'networkidle'});
     const title = await page.locator('h1').allTextContents();
     check(JSON.stringify(title) === JSON.stringify([en['error.title']]), `${name}: the page title is ${JSON.stringify(title)}, expected "${en['error.title']}"`);
-    const raw = await page.getByRole('link', {name: en['error.openRaw'], exact: true}).getAttribute('href');
+    const links = page.getByRole('link', {name: en['error.openRaw'], exact: true});
     const id = broken.path.slice(1, broken.path.indexOf('.'));
-    check(raw === `/raw/${id}`, `${name}: the raw link is ${raw}, expected /raw/${id}`);
+    const raw = (await links.count()) === 0 ? null : await links.getAttribute('href');
+    const expected = broken.raw ? `/raw/${id}` : null;
+    check(raw === expected, `${name}: the raw link is ${raw}, expected ${expected}`);
     await context.close();
   }
 }
