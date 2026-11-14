@@ -66,6 +66,8 @@ cargo test
 - 在同一網址修改 paste，並保留版本歷史。
 - 位於 `/v1` 下、帶版本號的 HTTP API，以及命令列用戶端。
 
+工作計畫見 [docs/plan.zh-TW.md](docs/plan.zh-TW.md)。
+
 ## 上游文件
 
 wastebin 的 README、變更紀錄與貢獻指南保留在 [docs/upstream](docs/upstream/README.md) 供參考。這些文件描述的是 wastebin，會隨 Zpaste 的修改而與現況不符。
