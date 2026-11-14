@@ -421,7 +421,7 @@ Target, P1:
 
 | Route | Becomes |
 | --- | --- |
-| `POST /`, `/raw/<id>`, `DELETE /<id>` | Thin adapters over the `/v1` services (invariant 1). One set of scenario tests runs against both paths. Current for `POST /`, `POST /new`, `/raw/<id>` and `/dl/<id>`: they call `crates/wastebin_server/src/service.rs`, as `/v1` does, and keep upstream's statuses (403 for a wrong password, the HTML password form for a missing one); `/raw` and `/dl` consume a burn paste on read, as upstream did. `v1::tests::legacy` runs the scenarios through every create route and both read routes. |
+| `POST /`, `/raw/<id>`, `DELETE /<id>` | Thin adapters over the `/v1` services (invariant 1). One set of scenario tests runs against both paths. Current for `POST /`, `POST /new`, `/raw/<id>` and `/dl/<id>`: they call `crates/wastebin_server/src/service.rs`, as `/v1` does, and keep upstream's statuses (403 for a wrong password, the HTML password form for a missing one); `/raw` and `/dl` consume a burn paste on read, as upstream did. `v1::tests::legacy` runs the scenarios through every create route and every read route: `/raw`, `/dl`, the HTML page and `/v1`. |
 | `/md/<id>.<ext>` | 302 to `/<id>.<ext>`. |
 | `/burn`, `/dl`, `/qr` | Kept. |
 | `GET /<id>[.<ext>]` | The HTML shell. |

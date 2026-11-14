@@ -25,6 +25,10 @@ enum Create {
 enum Read {
     /// `GET /raw/{id}`, which consumes a burn paste as upstream did.
     Raw,
+    /// `GET /dl/{id}`, which consumes like `/raw`.
+    Download,
+    /// `POST /{id}`, the HTML page's form, with the burn confirmed.
+    Html,
     /// `POST /v1/pastes/{id}/content` with `confirm_burn: true`.
     V1,
 }
@@ -98,27 +102,66 @@ async fn create_with(client: &Client, route: Create, paste: &Paste) -> String {
     }
 }
 
-async fn read_with(client: &Client, route: Read, id: &str, password: Option<&str>) -> Outcome {
+/// The outcome of a legacy read answered with `res`: 200 with the HTML password form is upstream's
+/// answer to a missing password, any other 200 is the paste, whose text `text_of` finds in the
+/// body.
+async fn legacy_outcome(res: reqwest::Response, text_of: impl Fn(String) -> String) -> Outcome {
+    match res.status() {
+        StatusCode::OK => {
+            let body = res.text().await.expect("text");
+            if body.contains(r#"type="password""#) {
+                Outcome::PasswordRequired
+            } else {
+                Outcome::Text(text_of(body))
+            }
+        }
+        StatusCode::FORBIDDEN => Outcome::WrongPassword,
+        StatusCode::NOT_FOUND => Outcome::NotFound,
+        status => unreachable!("legacy read answered {status}"),
+    }
+}
+
+/// Read `id` through `route`. `text` is the paste's content, which the HTML route shows inside its
+/// page: that route's outcome is the text when the page contains it.
+async fn read_with(
+    client: &Client,
+    route: Read,
+    id: &str,
+    password: Option<&str>,
+    text: &str,
+) -> Outcome {
     match route {
-        Read::Raw => {
-            let mut request = client.get(&format!("/raw/{id}"));
+        Read::Raw | Read::Download => {
+            let path = match route {
+                Read::Raw => "raw",
+                _ => "dl",
+            };
+            let mut request = client.get(&format!("/{path}/{id}"));
             if let Some(password) = password {
                 request = request.header(PASSWORD_HEADER_NAME, password);
             }
-            let res = request.send().await.expect("raw");
-            let html = res
-                .headers()
-                .get("content-type")
-                .and_then(|value| value.to_str().ok())
-                .is_some_and(|value| value.starts_with("text/html"));
-            match res.status() {
-                // The password form is upstream's answer to a missing password.
-                StatusCode::OK if html => Outcome::PasswordRequired,
-                StatusCode::OK => Outcome::Text(res.text().await.expect("text")),
-                StatusCode::FORBIDDEN => Outcome::WrongPassword,
-                StatusCode::NOT_FOUND => Outcome::NotFound,
-                status => unreachable!("/raw answered {status}"),
+            let res = request.send().await.expect("raw or dl");
+            legacy_outcome(res, |body| body).await
+        }
+        Read::Html => {
+            let mut form = vec![("confirm_burn", "1")];
+            if let Some(password) = password {
+                form.push(("password", password));
             }
+            let res = client
+                .post(&format!("/{id}"))
+                .form(&form)
+                .send()
+                .await
+                .expect("html");
+            legacy_outcome(res, |body| {
+                if body.contains(text) {
+                    text.to_owned()
+                } else {
+                    body
+                }
+            })
+            .await
         }
         Read::V1 => {
             let mut body = json!({"confirm_burn": true});
@@ -211,7 +254,7 @@ async fn scenarios_end_alike(creator: Create, reader: Read) {
     for (paste, reads) in scenarios() {
         let id = create_with(&client, creator, &paste).await;
         for (step, (password, expected)) in reads.into_iter().enumerate() {
-            let outcome = read_with(&client, reader, &id, password).await;
+            let outcome = read_with(&client, reader, &id, password, paste.text).await;
             assert_eq!(
                 outcome, expected,
                 "{creator:?} then {reader:?}, {:?} step {step}",
@@ -222,7 +265,8 @@ async fn scenarios_end_alike(creator: Create, reader: Read) {
 }
 
 // Every create route and every read route, including both crossings, one test per pair so their
-// key derivations run in parallel.
+// key derivations run in parallel. The HTML page and `/dl` read through their own code, so each
+// gets a pair; the other crossings add derivations without another path.
 #[tokio::test]
 async fn legacy_create_then_raw() {
     scenarios_end_alike(Create::Legacy, Read::Raw).await;
@@ -244,7 +288,17 @@ async fn v1_create_then_v1_read() {
 }
 
 #[tokio::test]
-async fn legacy_and_v1_reads_consume_a_burn_paste_once_between_them() {
+async fn v1_create_then_html() {
+    scenarios_end_alike(Create::V1, Read::Html).await;
+}
+
+#[tokio::test]
+async fn form_create_then_download() {
+    scenarios_end_alike(Create::Form, Read::Download).await;
+}
+
+#[tokio::test]
+async fn read_routes_consume_a_burn_paste_once_between_them() {
     let client = Client::with_settings(StoreCookies(false), settings()).await;
     let paste = Paste {
         text: "once",
@@ -253,14 +307,19 @@ async fn legacy_and_v1_reads_consume_a_burn_paste_once_between_them() {
     };
     let id = create_with(&client, Create::Legacy, &paste).await;
 
-    // Both routes race for one paste; the service gives it to exactly one reader.
-    let (raw, v1, raw2, v12) = tokio::join!(
-        read_with(&client, Read::Raw, &id, None),
-        read_with(&client, Read::V1, &id, None),
-        read_with(&client, Read::Raw, &id, None),
-        read_with(&client, Read::V1, &id, None),
+    // Every read route races for one paste, twice each; exactly one reader gets it.
+    let reader = |route| read_with(&client, route, &id, None, paste.text);
+    let (raw, download, html, v1, raw2, download2, html2, v12) = tokio::join!(
+        reader(Read::Raw),
+        reader(Read::Download),
+        reader(Read::Html),
+        reader(Read::V1),
+        reader(Read::Raw),
+        reader(Read::Download),
+        reader(Read::Html),
+        reader(Read::V1),
     );
-    let outcomes = [raw, v1, raw2, v12];
+    let outcomes = [raw, download, html, v1, raw2, download2, html2, v12];
     let read = outcomes
         .iter()
         .filter(|outcome| **outcome == Outcome::Text(String::from("once")))
@@ -269,7 +328,7 @@ async fn legacy_and_v1_reads_consume_a_burn_paste_once_between_them() {
         .iter()
         .filter(|outcome| **outcome == Outcome::NotFound)
         .count();
-    assert_eq!((read, gone), (1, 3), "{outcomes:?}");
+    assert_eq!((read, gone), (1, 7), "{outcomes:?}");
 }
 
 #[tokio::test]
@@ -290,7 +349,7 @@ async fn legacy_routes_answer_the_client_rate_with_its_retry_after() {
     // The create spends one token, the wrong password the other.
     let id = create_with(&client, Create::Legacy, &paste).await;
     assert_eq!(
-        read_with(&client, Read::Raw, &id, Some("wrong")).await,
+        read_with(&client, Read::Raw, &id, Some("wrong"), paste.text).await,
         Outcome::WrongPassword
     );
 
