@@ -1,7 +1,8 @@
 # web/AGENTS.md: frontend rules
 
 Rules for every change to the files under this directory. The root `AGENTS.md` (rule priority,
-workflow, CI, writing, commits) applies as well; numbers are in `REQUIREMENTS.md`.
+workflow, CI, writing, commits) applies as well; numbers are in `REQUIREMENTS.md`; the
+project's interface values and visual rules are in `docs/design-language.md`.
 
 ## Frontend
 

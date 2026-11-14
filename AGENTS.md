@@ -47,6 +47,7 @@ settle a conflict, write it into the open-questions list and ask the owner.
 | `crates/AGENTS.md` | agents changing backend files (loaded for files under `crates/`) | security, money, data, operations |
 | `REVIEW.md` | reviewers; a review brief names it | how to review and report |
 | `REQUIREMENTS.md` | everyone | numbers, gates, exceptions |
+| `docs/workflow.md`, `docs/design-language.md` | anyone planning a branch, a review, a deployment or a screen | project workflow rules (branch pattern, no direct commit to `main`, merge rights, review routing, phase acceptance, runbook) and design rules (tokens, renderers, states) |
 
 Each rule is written in one file only. The frontend lives in `web/`, the backend in `crates/`.
 A rule a tool can check belongs in a gate (lint, test, hook); prose is for rules that need judgment.

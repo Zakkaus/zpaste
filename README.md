@@ -83,6 +83,8 @@ cargo test
 - Editing a paste at the same URL, with version history.
 - A versioned HTTP API under `/v1` and a command-line client.
 
+The working plan, in Traditional Chinese, is [docs/plan.zh-TW.md](docs/plan.zh-TW.md).
+
 ## Upstream documents
 
 wastebin's README, changelog and contribution guide are kept in
