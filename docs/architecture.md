@@ -376,8 +376,10 @@ flowchart TD
   deleted with the paste: a trigger on `entries` removes the revisions on every
   delete, burn and purge included (current). History endpoints check existence
   and expiry before permission.
-- One paste's total history is capped at a multiple of
-  `WASTEBIN_MAX_BODY_SIZE`. The multiple is open.
+- One paste's total history is capped at 4 × `WASTEBIN_MAX_BODY_SIZE` (owner
+  ruling A10, 2026-11-15). After each write the oldest versions are trimmed
+  until both the 20-version and the size limit hold, so a paste may keep fewer
+  than 20 versions; the cap never refuses a write.
 - The migration backfills a first version for every existing paste from its
   stored bytes, nonce and title, without decrypting and without consuming
   burn-after-reading pastes. `extension` and `created_at` stay empty for them.
@@ -525,6 +527,6 @@ Points the plan does not decide. Each blocks the phase named.
 | A7 | The test domain on which the new frontend is accepted before the switch (plan section 七). | P1 |
 | A8 | Backup schedule for `/var/lib/zpaste`. | P1 release |
 | A9 | Who tracks upstream security fixes (plan section 四 asks for one named person). | P1 |
-| A10 | The multiple of `WASTEBIN_MAX_BODY_SIZE` that caps one paste's history, and whether that cap may leave fewer than 20 versions. Recommended: 4, trimming the oldest versions until both limits hold; alternative: keep 20 and refuse the write with 413 (owner ruling pending, `docs/api/README.md`). | P2 |
+| A10 | Settled 2026-11-15 (「單一 paste 的歷史總大小 可以」): the cap is 4 × `WASTEBIN_MAX_BODY_SIZE` per paste, and trimming the oldest versions until both limits hold may leave fewer than 20; see "Revisions" and `docs/api/README.md`, "Owner rulings". | P2 |
 | A11 | Whether history may branch (left to Zephyr). | After P2 |
 | A12 | How a squatted slug is reclaimed without an admin panel, and what removes empty workspaces after 30 days. | P2b |

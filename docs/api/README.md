@@ -95,9 +95,8 @@ until both hold. Neither refuses the write, so neither causes 413; 413 means
 only that the body exceeds `WASTEBIN_MAX_BODY_SIZE`.
 
 1. At most 20 versions, the current one included (plan section 四).
-2. A total size limit on one paste's history (architecture A10, P2). Its
-   multiple, and whether it may leave fewer than 20 versions, are pending
-   owner rulings below.
+2. At most 4 × `WASTEBIN_MAX_BODY_SIZE` bytes over all versions of one paste
+   (architecture A10, P2). This limit may leave fewer than 20 versions.
 
 ## Error types by operation
 
@@ -212,7 +211,9 @@ The review of 2026-11-15 settled these; the file implements each answer.
    plain text by mistake.
 9. An omitted `X-Entry-Kind` keeps the kind. A sent one changes it in the same
    transaction as the content; a 412 or any other failure leaves both.
-10. Pending owner ruling, below.
+10. Entry names: any Unicode except `/` and control characters; not `.` or
+    `..`; NFC-normalised; 1 to 128 bytes of UTF-8. Chinese names work (owner
+    ruling, below).
 11. An entry whose paste has expired is hidden from `GET`. A `PUT` without
     `If-Match` creates a new paste under the same name; a `PUT` with
     `If-Match` (stale tag or `*`) is 412 and creates nothing.
@@ -222,8 +223,9 @@ The review of 2026-11-15 settled these; the file implements each answer.
     and a full workspace are 409.
 13. Entry order: `kind` ascending, entries without a kind last; then
     `updated_at` newest first; then `name`. A full workspace is 409
-    `workspace_full`, not 413. Title rules and the entry limit are pending
-    owner rulings, below.
+    `workspace_full`, not 413. A workspace holds at most 500 entries; its
+    title is optional, defaults to the slug, and has 1 to 200 characters
+    (owner ruling, below).
 14. Replaced: see "History limits" and the A10 ruling below.
 15. `If-Match` takes RFC 9110 syntax. `*` matches any current version, a weak
     tag never matches, and a list matches when any strong tag equals the
@@ -235,17 +237,15 @@ The review of 2026-11-15 settled these; the file implements each answer.
     burst 40). Credential failures are answered before any derivation.
 17. Pinned in P0; see "Generating the contract".
 
-## Pending owner rulings
+## Owner rulings
 
-The file carries the recommended default for each, so it stays consistent;
-the owner may choose the alternative.
+The owner settled these on 2026-11-15; the file states each as a rule.
 
-| Item | Recommended (in the file) | Alternative | Where in the file |
+| Item | Rule | Owner's answer | Where in the file |
 | --- | --- | --- | --- |
-| Q10, entry name | Any Unicode except `/` and control characters; not `.` or `..`; NFC-normalised; 1 to 128 bytes of UTF-8. Chinese file names work. | ASCII `[A-Za-z0-9._-]{1,64}`, which rejects Chinese names. | `EntryName`, `EntryNamePath` |
-| Q13, workspace title | Optional; defaults to the slug; 1 to 200 characters. | Required at create. | `WorkspaceTitle`, `createWorkspace` |
-| Q13, entries per workspace | At most 500. | Another number, or no limit. | `Workspace.entries.maxItems`, `workspace_full` |
-| A10, history total | At most 4 × `WASTEBIN_MAX_BODY_SIZE` per paste; trim the oldest versions until both limits hold, which may keep fewer than 20. | Keep the 20-version promise and refuse a write that would exceed the total with 413. | `replaceContent`, "History limits" |
+| Q10, entry name | Any Unicode except `/` and control characters; not `.` or `..`; NFC-normalised; 1 to 128 bytes of UTF-8. Chinese file names work. | 「workspace 的 entry 名稱可以用中文嗎 可以」 | `EntryName`, `EntryNamePath` |
+| Q13, workspace title and entries | The title is optional, defaults to the slug, and has 1 to 200 characters. A workspace holds at most 500 entries. | 「workspace 的標題和上限 可以」 | `WorkspaceTitle`, `createWorkspace`, `Workspace.entries.maxItems`, `workspace_full` |
+| A10, history total | At most 4 × `WASTEBIN_MAX_BODY_SIZE` per paste; the oldest versions are trimmed until both limits hold, which may keep fewer than 20. A write is never refused for history size. | 「單一 paste 的歷史總大小 可以」 | `replaceContent`, "History limits" |
 
 ## Plan text to amend
 
@@ -258,7 +258,8 @@ amends them.
 - The workspace API list (line 242 and the lines around it) lacks
   `POST /v1/workspaces/{slug}/entries` (Q12).
 - Lines 191 and 211 give the 20-version limit and the history total
-  separately; after the A10 ruling, state how the two interact.
+  separately. After the A10 ruling, trimming removes the oldest versions until
+  both hold, so the size limit may leave fewer than 20.
 
 
 ## Generating the contract

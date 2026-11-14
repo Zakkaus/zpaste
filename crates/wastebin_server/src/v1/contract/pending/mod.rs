@@ -159,10 +159,10 @@ fn read_content() {}
 /// otherwise a new version is written. Expiry does not change.
 ///
 /// After the write, history is trimmed, oldest first, until both limits hold:
-/// at most 20 versions, the current one included, and the history total limit
-/// of architecture A10. Trimming never refuses the write. The A10 multiple,
-/// and whether that limit may leave fewer than 20 versions, await the owner
-/// (`docs/api/README.md`, "Pending owner rulings").
+/// at most 20 versions, the current one included, and at most
+/// 4 × `WASTEBIN_MAX_BODY_SIZE` bytes over all versions of the paste.
+/// The size limit may leave fewer than 20 versions. Trimming never refuses the
+/// write.
 #[utoipa::path(
     put,
     path = "/v1/pastes/{id}/content",
@@ -247,7 +247,7 @@ fn read_version_content() {}
 ///
 /// Slugs are first come, first served. The workspace belongs to the identity
 /// that creates it (with the cookie, its first). An omitted title defaults to
-/// the slug; the title rules await the owner (`docs/api/README.md`).
+/// the slug.
 #[utoipa::path(
     post,
     path = "/v1/workspaces",

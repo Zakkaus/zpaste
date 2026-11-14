@@ -81,7 +81,7 @@ impl Contract {
                 "name": "name",
                 "in": "path",
                 "required": true,
-                "description": "Entry name, unique within the workspace, percent-encoded in the path.\nThe server normalises it to NFC before comparing or storing. Any Unicode\nexcept `/` and control characters; not `.` or `..`; 1 to 128 bytes of\nUTF-8 (the schema can only bound characters). These rules await the\nowner (`docs/api/README.md`, \"Pending owner rulings\").\n",
+                "description": "Entry name, unique within the workspace, percent-encoded in the path.\nThe server normalises it to NFC before comparing or storing. Any Unicode\nexcept `/` and control characters; not `.` or `..`; 1 to 128 bytes of\nUTF-8 (the schema can only bound characters), so Chinese names work.\n",
                 "schema": {"$ref": "#/components/schemas/EntryName"},
             },
             "IfMatch": {

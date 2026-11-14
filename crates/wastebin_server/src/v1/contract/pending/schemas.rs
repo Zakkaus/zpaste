@@ -37,7 +37,7 @@ pub(crate) struct Slug(String);
 )]
 pub(crate) struct EntryName(String);
 
-/// 1 to 200 characters; pending owner ruling (`docs/api/README.md`).
+/// 1 to 200 characters.
 #[derive(Serialize, ToSchema)]
 #[schema(min_length = 1, max_length = 200)]
 pub(crate) struct WorkspaceTitle(String);
@@ -254,7 +254,7 @@ pub(crate) struct Workspace {
     title: WorkspaceTitle,
     created_at: Timestamp,
     updated_at: Timestamp,
-    /// At most 500 entries (pending owner ruling); order as in `showWorkspace`.
+    /// At most 500 entries; order as in `showWorkspace`.
     #[schema(max_items = 500)]
     entries: Vec<WorkspaceEntry>,
     /// `self` is the API URL; `bookmark` is `/w/<slug>`.

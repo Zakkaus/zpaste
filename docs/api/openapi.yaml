@@ -399,10 +399,10 @@ paths:
         otherwise a new version is written. Expiry does not change.
 
         After the write, history is trimmed, oldest first, until both limits hold:
-        at most 20 versions, the current one included, and the history total limit
-        of architecture A10. Trimming never refuses the write. The A10 multiple,
-        and whether that limit may leave fewer than 20 versions, await the owner
-        (`docs/api/README.md`, "Pending owner rulings").
+        at most 20 versions, the current one included, and at most
+        4 × `WASTEBIN_MAX_BODY_SIZE` bytes over all versions of the paste.
+        The size limit may leave fewer than 20 versions. Trimming never refuses the
+        write.
       operationId: replaceContent
       parameters:
       - $ref: '#/components/parameters/PasteIdPath'
@@ -638,7 +638,7 @@ paths:
       description: |-
         Slugs are first come, first served. The workspace belongs to the identity
         that creates it (with the cookie, its first). An omitted title defaults to
-        the slug; the title rules await the owner (`docs/api/README.md`).
+        the slug.
       operationId: createWorkspace
       parameters:
       - $ref: '#/components/parameters/RequestId'
@@ -1643,7 +1643,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/WorkspaceEntry'
-          description: At most 500 entries (pending owner ruling); order as in `showWorkspace`.
+          description: At most 500 entries; order as in `showWorkspace`.
           maxItems: 500
         links:
           type: array
@@ -1719,7 +1719,7 @@ components:
       additionalProperties: false
     WorkspaceTitle:
       type: string
-      description: 1 to 200 characters; pending owner ruling (`docs/api/README.md`).
+      description: 1 to 200 characters.
       maxLength: 200
       minLength: 1
     WorkspaceUpdateRequest:
@@ -1996,8 +1996,7 @@ components:
         Entry name, unique within the workspace, percent-encoded in the path.
         The server normalises it to NFC before comparing or storing. Any Unicode
         except `/` and control characters; not `.` or `..`; 1 to 128 bytes of
-        UTF-8 (the schema can only bound characters). These rules await the
-        owner (`docs/api/README.md`, "Pending owner rulings").
+        UTF-8 (the schema can only bound characters), so Chinese names work.
       required: true
       schema:
         $ref: '#/components/schemas/EntryName'
