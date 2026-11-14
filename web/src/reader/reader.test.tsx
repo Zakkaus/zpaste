@@ -81,3 +81,23 @@ describe('wide tables', () => {
     expect(MARKDOWN_CSS).toMatch(new RegExp(`\\.${WRAPPER}\\) \\{[^}]*background:`));
   });
 });
+
+describe('Markdown images and links', () => {
+  it('loads images lazily without a referrer, inline and on their own line', () => {
+    const html = renderToString(<MarkdownView source={'![logo](https://example.com/a.png)\n\nText ![icon](https://example.com/b.png) inline.'} />);
+    const images = html.match(/<img [^>]*>/g) ?? [];
+    expect(images).toHaveLength(2);
+    for (const image of images) {
+      expect(image).toContain('loading="lazy"');
+      expect(image).toContain('referrerPolicy="no-referrer"');
+    }
+    console.log(html);
+  });
+
+  it('drops unsafe link and image addresses', () => {
+    const html = renderToString(<MarkdownView source={'[x](javascript:alert(1)) ![y](javascript:alert(2)) ![z](data:image/png;base64,AAAA)'} />);
+    // Astryx keeps a rejected destination as the text the author wrote, never as an address.
+    expect(html).not.toMatch(/(?:href|src)="(?:javascript|data):/i);
+    expect(html).not.toMatch(/<a |<img /);
+  });
+});

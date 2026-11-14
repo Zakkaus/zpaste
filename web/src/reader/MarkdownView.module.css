@@ -43,6 +43,26 @@
   line-height: var(--text-heading-5-leading);
 }
 
+/*
+ * Images (MarkdownView's renderer), as Astryx draws its own: never wider than the column, with the
+ * element radius. One on its own line is a block with Astryx's image spacing, none at the paste's start
+ * or end; the alt text that replaces a failed image takes the same place.
+ */
+.image {
+  max-width: 100%;
+  border-radius: var(--radius-element);
+}
+.body > .image {
+  display: block;
+  margin-block: var(--spacing-3);
+}
+.body > .image:first-child {
+  margin-block-start: 0;
+}
+.body > .image:last-child {
+  margin-block-end: 0;
+}
+
 /* Inline code in a heading, such as a file name, takes the heading's size instead of the code size. */
 .body :is(h2, h3, h4, h5, h6) code {
   font-size: inherit;

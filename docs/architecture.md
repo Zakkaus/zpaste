@@ -44,6 +44,7 @@ what fails when it is broken, so a change can be judged against it.
 | 14 | A failed migration stops the server before it serves traffic. | The server accepts requests against a half-migrated schema and writes bad rows. | Current (upstream migrates at start-up) |
 | 15 | Logs never contain `Authorization`, `X-Paste-Password`, the `owner` query parameter or the body of a create response. | An owner token or a password is readable by anyone with log access. | Target, P1 |
 | 16 | `?owner=` is exchanged before any HTML is produced: the server stores the token in a cookie and answers 302 to the same URL without the token, with `no-store`. | The token stays in browser history, `Referer` headers and caches. | Current (cookie and 302, `paste.rs`); Target, P1 (`no-store`) |
+| 17 | A reading page's Content Security Policy is upstream's strict base plus `connect-src 'self'` and `img-src 'self' https: data:`; no other page widens `img-src`. Images from a paste load lazily and send no `Referer`. | Too strict: every image in a Markdown paste is blocked, which upstream's `/md/` route allowed (`img-src *`). Too wide: another page loads images it never meant to, or a paste's URL reaches an image's host. | Target, P1 slice 4 (the shell sets the header); the app side is in place |
 
 ## System context
 
@@ -241,7 +242,17 @@ plain text. Other app routes are `/<id>/edit`, `/<id>/history`, `/` (new paste),
 `/w/<slug>` (workspace) and `/w/<slug>/<name>` (one entry of it).
 
 The Content Security Policy keeps upstream's strict base and adds
-`connect-src 'self'`. The start-up script is an external file. The only
+`connect-src 'self'`; reading pages also allow `img-src 'self' https: data:`
+(invariant 17), as upstream allowed images on `/md/`. The app draws a Markdown
+image with `loading="lazy"` and `referrerpolicy="no-referrer"`, and an image
+that is blocked or fails to load gives way to its alt text in brackets.
+`web/scripts/shoot.ts` serves every page with this policy and fails on any
+violation other than the image it means to be blocked. Upstream's
+`style-src 'self' data:` blocks the two `<style>` elements Astryx inserts at
+run time (CodeBlock's highlight colours, `data-astryx-highlight-styles`, and
+the layer slide rules, `#astryx-layer-slide-rules`), so code would lose its
+colours; how the policy admits them is open (A13). The start-up script is an
+external file. The only
 escaping Zpaste writes itself is the shell's JSON embedding (invariant 5);
 everything the app renders relies on the libraries: Astryx `Markdown` turns
 Markdown into React elements and never renders raw HTML, mermaid runs with
@@ -510,3 +521,4 @@ Points the plan does not decide. Each blocks the phase named.
 | A10 | The multiple of `WASTEBIN_MAX_BODY_SIZE` that caps one paste's history. | P2 |
 | A11 | Whether history may branch (left to Zephyr). | After P2 |
 | A12 | How a squatted slug is reclaimed without an admin panel, and what removes empty workspaces after 30 days. | P2b |
+| A13 | How the reading page's policy admits Astryx's two run-time `<style>` elements: their `sha256` hashes (exact, but pinned to the Astryx version, so an upgrade must update them) or `'unsafe-inline'` for styles only (the app renders no raw HTML, so only CSS from Astryx reaches the page). `shoot.ts` uses `'unsafe-inline'` until this is decided. | P1 slice 4 |

@@ -1,3 +1,4 @@
+import {useState} from 'react';
 import {Code} from '@astryxdesign/core/Code';
 import {CodeBlock} from '@astryxdesign/core/CodeBlock';
 import {Markdown, type MarkdownComponents} from '@astryxdesign/core/Markdown';
@@ -25,7 +26,20 @@ function InlineCode({children}: {children: string}) {
   return <Code>{parts.flatMap((part, index) => (index === 0 ? [part] : [<wbr key={index} />, part]))}</Code>;
 }
 
-const COMPONENTS: MarkdownComponents = {code: FencedCode, inlineCode: InlineCode};
+/**
+ * An image from the paste, which may point anywhere: it loads only as it nears the screen, sends no
+ * `Referer` (the paste's URL would reach the image's host), and one that fails to load, or that the
+ * page's Content Security Policy blocks, gives way to its alt text in brackets, as Astryx draws an image
+ * whose address it rejects. Supplying this renderer drops Astryx's block wrapper; the stylesheet
+ * restores its spacing.
+ */
+function MarkdownImage({src, alt}: {src: string; alt: string}) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <span className={css.image}>{alt === '' ? null : `[${alt}]`}</span>;
+  return <img className={css.image} src={src} alt={alt} loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => setFailed(true)} />;
+}
+
+const COMPONENTS: MarkdownComponents = {code: FencedCode, inlineCode: InlineCode, image: MarkdownImage};
 
 /**
  * A Markdown paste. Astryx Markdown renders React elements only and never raw HTML, so no sanitizer
