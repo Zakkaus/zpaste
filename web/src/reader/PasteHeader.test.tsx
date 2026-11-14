@@ -1,5 +1,7 @@
+import {act} from 'react';
+import {createRoot} from 'react-dom/client';
 import {renderToString} from 'react-dom/server';
-import {describe, expect, it} from 'vitest';
+import {afterEach, describe, expect, it, vi} from 'vitest';
 import type {EmbeddedPaste} from '../shell/embedded';
 import {PasteHeader} from './PasteHeader';
 
@@ -47,6 +49,39 @@ describe('PasteHeader copy action', () => {
     const html = renderToString(<PasteHeader data={data()} extension="md" />);
     expect(html).toMatch(/<button[^>]*aria-label="Copy"/);
     for (const label of ['>Copy<', '>Copied<', '>Failed<']) expect(html).toContain(label);
+  });
+});
+
+describe('PasteHeader copy feedback', () => {
+  (globalThis as {IS_REACT_ACT_ENVIRONMENT?: boolean}).IS_REACT_ACT_ENVIRONMENT = true;
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    document.body.replaceChildren();
+  });
+
+  /** Mounts the header, presses Copy with `writeText` as the clipboard, and returns the button. */
+  async function pressCopy(writeText: (text: string) => Promise<void>): Promise<HTMLButtonElement> {
+    vi.stubGlobal('navigator', {...navigator, clipboard: {writeText}});
+    const host = document.body.appendChild(document.createElement('div'));
+    await act(async () => createRoot(host).render(<PasteHeader data={data()} extension="md" />));
+    const button = host.querySelector<HTMLButtonElement>('button[aria-label="Copy"]')!;
+    await act(async () => button.click());
+    return button;
+  }
+
+  it('copies the paste text and names the button Copied', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    const button = await pressCopy(writeText);
+    expect(writeText).toHaveBeenCalledWith('# Title');
+    expect(button.getAttribute('aria-label')).toBe('Copied');
+  });
+
+  it('says a rejected clipboard write failed, on the button and to a screen reader', async () => {
+    const button = await pressCopy(() => Promise.reject(new Error('denied')));
+    expect(button.getAttribute('aria-label')).toBe('Copy failed');
+    await act(() => new Promise(resolve => setTimeout(resolve, 200)));
+    const regions = [...document.querySelectorAll('[aria-live]')].map(region => region.textContent);
+    expect(regions.join('|')).toContain('Copy failed');
   });
 });
 

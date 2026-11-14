@@ -1,7 +1,7 @@
 import {Fragment, useState, type ReactNode} from 'react';
 import * as stylex from '@stylexjs/stylex';
 import {Button} from '@astryxdesign/core/Button';
-import {useClipboard} from '@astryxdesign/core/hooks';
+import {useAnnounce, useClipboard} from '@astryxdesign/core/hooks';
 import {HStack, VStack} from '@astryxdesign/core/Layout';
 import {Heading} from '@astryxdesign/core/Heading';
 import {Text} from '@astryxdesign/core/Text';
@@ -87,19 +87,28 @@ export function PasteHeader({data, extension}: {data: EmbeddedPaste; extension: 
  * Edit comes next to Copy because both act on the paste; Raw and Download open it elsewhere. Edit shows
  * only when the shell says the reader may edit (`can_edit`) and opens `/<id>/edit`, the edit page (P2).
  * Raw and Download use the existing routes (`/dl` names the file after the key, so it keeps the extension);
- * Copy copies the text that is already in the page.
+ * Copy copies the text that is already in the page. A failed copy says so on the button and to a screen
+ * reader at once; the hook announces only success.
  */
 function PasteActions({content, id, fileName, canEdit}: {content: string; id: string; fileName: string; canEdit: boolean}) {
   const {copy, isCopied} = useClipboard({announce: t('action.copiedAnnouncement')});
+  const announce = useAnnounce();
   const [isFailed, setFailed] = useState(false);
   const state = isCopied ? 'copied' : isFailed ? 'failed' : 'copy';
+  const onCopy = () =>
+    void copy(content)
+      .catch(() => false)
+      .then(copied => {
+        setFailed(!copied);
+        if (!copied) announce(t('action.copyFailed'), 'assertive');
+      });
   return (
     <HStack gap={SPACE.cluster} role="group" aria-label={t('action.actions')} xstyle={styles.wrap}>
       <Button
         variant="primary"
         size={BUTTON.toolbar}
         label={t(COPY_STATES[state].name)}
-        onClick={() => void copy(content).then(copied => setFailed(!copied))}>
+        onClick={onCopy}>
         <span {...stylex.props(styles.labels)}>
           {Object.entries(COPY_STATES).map(([key, {visible}]) => (
             <span key={key} aria-hidden {...stylex.props(styles.label, key !== state && styles.labelHidden)}>
