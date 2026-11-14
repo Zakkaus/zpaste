@@ -316,6 +316,23 @@ async fn missing_pastes_get_the_page_with_404() {
 }
 
 #[tokio::test]
+async fn old_rendered_view_redirects_to_the_reading_page() {
+    let client = Client::new(StoreCookies(false)).await;
+    let (id, _) = create(&client, json!({"content": "# x", "extension": "md"})).await;
+
+    let res = client.get(&format!("/md/{id}.md")).send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::FOUND);
+    assert_eq!(
+        res.headers()[header::LOCATION],
+        format!("/{id}.md").as_str()
+    );
+    let res = client.get(&format!("/md/{id}")).send().await.unwrap();
+    assert_eq!(res.headers()[header::LOCATION], format!("/{id}").as_str());
+    let res = client.get("/md/not-an-id").send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn web_files_are_served_with_their_cache_policy() {
     let client = Client::new(StoreCookies(false)).await;
 

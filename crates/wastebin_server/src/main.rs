@@ -96,19 +96,9 @@ impl FromRef<AppState> for Cache {
 }
 
 async fn security_headers_layer(req: Request, next: Next) -> Response {
-    // Rendered Markdown may embed remote images via `![](…)`; relax img-src for that route only.
     const CSP_STRICT: HeaderValue = HeaderValue::from_static(
         "default-src 'none'; script-src 'self'; img-src 'self' data: ; style-src 'self' data: ; font-src 'self' data: ; object-src 'none' ; base-uri 'none' ; frame-ancestors 'none' ; form-action 'self' ;",
     );
-    const CSP_RENDERED: HeaderValue = HeaderValue::from_static(
-        "default-src 'none'; script-src 'self'; img-src * data: ; style-src 'self' data: ; font-src 'self' data: ; object-src 'none' ; base-uri 'none' ; frame-ancestors 'none' ; form-action 'self' ;",
-    );
-
-    let csp = if req.uri().path().starts_with("/md/") {
-        CSP_RENDERED
-    } else {
-        CSP_STRICT
-    };
 
     let headers: [(HeaderName, HeaderValue); 6] = [
         (SERVER, HeaderValue::from_static(env!("CARGO_PKG_NAME"))),
@@ -127,7 +117,7 @@ async fn security_headers_layer(req: Request, next: Next) -> Response {
     response
         .headers_mut()
         .entry(CONTENT_SECURITY_POLICY)
-        .or_insert(csp);
+        .or_insert(CSP_STRICT);
     response
 }
 
@@ -241,10 +231,7 @@ fn make_app(state: AppState, timeout: Duration, max_body_size: usize) -> Router 
         .route("/theme", get(theme::get))
         .route("/new", post(insert::form::post))
         .route("/qr/{id}", get(html::qr::get))
-        .route(
-            "/md/{id}",
-            get(html::rendered::get).post(html::rendered::get),
-        )
+        .route("/md/{id}", get(html::paste::rendered))
         .route("/burn/{id}", get(html::burn::get))
         .route(
             "/{id}",

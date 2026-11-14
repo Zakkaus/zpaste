@@ -98,6 +98,15 @@ pub async fn get(
     reading_page(&state, StatusCode::OK, &Reading::Plain(embedded), &path)
 }
 
+/// `GET /md/<id>[.<ext>]`, upstream's rendered Markdown view: the reading page renders Markdown
+/// now, so the old address leads there.
+pub async fn rendered(Path(path): Path<String>) -> Response {
+    match path.parse::<Key>() {
+        Ok(key) => found(&format!("/{key}")),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 /// 302 to `location`, which the caller built from a parsed [`Key`] and so is a valid header.
 fn found(location: &str) -> Response {
     let location = HeaderValue::try_from(location).unwrap_or(HeaderValue::from_static("/"));

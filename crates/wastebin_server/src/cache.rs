@@ -37,8 +37,6 @@ pub(crate) fn valid_extension(extension: &str) -> bool {
 pub(crate) enum Mode {
     /// Syntax-highlighted source view.
     Source,
-    /// Markdown rendered to HTML.
-    Rendered,
 }
 
 /// Internal cache slot partitioning cached HTML by paste identity and render mode.

@@ -2,7 +2,6 @@ pub mod burn;
 pub mod index;
 pub mod paste;
 pub mod qr;
-pub mod rendered;
 
 use std::fmt;
 
@@ -23,11 +22,6 @@ impl FormAction {
     /// Post back to the source view at `/{key}`.
     pub(crate) fn source(key: &Key) -> Self {
         Self(format!("/{key}"))
-    }
-
-    /// Post back to the rendered Markdown view at `/md/{key}`.
-    pub(crate) fn rendered(key: &Key) -> Self {
-        Self(format!("/md/{key}"))
     }
 }
 
