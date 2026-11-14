@@ -1,5 +1,5 @@
 {
-  description = "Wastebin is a pastebin";
+  description = "Zpaste is a pastebin based on wastebin";
 
   # Nixpkgs / NixOS version to use.
   # inputs.nixpkgs.url = "nixpkgs/nixos-21.11";
@@ -25,8 +25,8 @@
           pkgs = nixpkgsFor.${system};
         in
         {
-          wastebin = with pkgs; rustPlatform.buildRustPackage rec {
-            pname = "wastebin";
+          zpaste = with pkgs; rustPlatform.buildRustPackage rec {
+            pname = "zpaste";
             version = "3.2.0";
 
             src = ./.;
@@ -40,16 +40,14 @@
             env.ZSTD_SYS_USE_PKG_CONFIG = true;
 
             meta = with lib; {
-              description = "Wastebin is a pastebin";
-              homepage = "https://github.com/matze/wastebin";
-              changelog = "https://github.com/matze/wastebin/blob/${src.rev}/CHANGELOG.md";
+              description = "Zpaste is a pastebin based on wastebin";
+              homepage = "https://github.com/Zakkaus/zpaste";
               license = licenses.mit;
-              maintainers = with maintainers; [ pinpox ];
-              mainProgram = "wastebin";
+              mainProgram = "zpaste";
             };
           };
         });
 
-      defaultPackage = forAllSystems (system: self.packages.${system}.wastebin);
+      defaultPackage = forAllSystems (system: self.packages.${system}.zpaste);
     };
 }

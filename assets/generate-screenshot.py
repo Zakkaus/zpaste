@@ -13,7 +13,7 @@ upper-right triangle, light lower-left triangle).
 
 Run `uv run assets/generate-screenshot.py` from the repo root. Playwright's
 Chromium is installed automatically on first use. The script expects the
-server binary at `target/release/wastebin`; run `cargo build --release -p
+server binary at `target/release/zpaste`; run `cargo build --release -p
 wastebin` first.
 """
 
@@ -35,7 +35,7 @@ from PIL import Image
 from playwright.async_api import async_playwright
 
 REPO = Path(__file__).resolve().parent.parent
-BINARY = REPO / "target" / "release" / "wastebin"
+BINARY = REPO / "target" / "release" / "zpaste"
 PASTE_SOURCE = REPO / "crates" / "wastebin_server" / "src" / "main.rs"
 OUTPUT = REPO / "assets" / "screenshot.webp"
 HIGHLIGHT_FRAGMENT = "#L5-L8"

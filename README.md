@@ -1,311 +1,96 @@
-# <img width="24px" height="24px" style="position: relative; top: 2px;" src="assets/favicon.png"/> wastebin
+# Zpaste
 
-[![Rust](https://github.com/matze/wastebin/actions/workflows/rust.yml/badge.svg)](https://github.com/matze/wastebin/actions/workflows/rust.yml)
+English | [繁體中文](README.zh-TW.md) | [简体中文](README.zh-CN.md)
 
-## <strong><a href="https://war.ukraine.ua/support-ukraine/">support 🇺🇦</a> • <a href="https://commission.europa.eu/strategy-and-policy/state-union/state-union-2022/defending-eu-values">defend 🇪🇺</a></strong>
+Zpaste is a self-hosted pastebin for reading Markdown, code and logs, whether a
+person wrote them or an AI tool generated them. It is built to replace the
+wastebin instance at https://paste.gentoozh.org and to make long pastes readable
+there. Editing a paste at the same URL and keeping its version history are
+planned.
 
-A minimal pastebin with a design shamelessly copied from
-[bin](https://github.com/WantGuns/bin).
+Zpaste is based on [wastebin](https://github.com/matze/wastebin) by Matthias
+Vogelgesang and keeps wastebin's storage, encryption, expiration and
+burn-after-reading code.
 
-<p align="center"><img src="https://raw.githubusercontent.com/matze/wastebin/master/assets/screenshot.webp"></p>
+## Status
 
-<p align="center"><strong><a href="https://bin.bloerg.net">DEMO</a></strong> (resets every day) • <strong><a href="https://matze.github.io/wastebin/">THEMES</a></strong></p>
+Zpaste is in early development. Its behaviour currently equals upstream
+wastebin at commit `c0ec968`, except that the server executable is named
+`zpaste` and log lines name `zpaste` as their target. Configuration variables
+keep the `WASTEBIN_` prefix, and the HTTP API is wastebin's.
 
-You are reading the documentation for an **unreleased version**. You can refer
-to released versions here:
+## Build
 
-**[3.9.0](https://github.com/matze/wastebin/tree/c829df9d116368459541b145350ea319d7a04b26)**
-•
-[3.8.0](https://github.com/matze/wastebin/tree/3e2f1425aa4aa8072da79b2a8c0c6af75074efa6)
-•
-[3.7.2](https://github.com/matze/wastebin/tree/dfca1dc82b78394d8e2dfe209d9ef3fb539da605)
-•
-[3.6.2](https://github.com/matze/wastebin/tree/f9cb25a4d5b19fa938eef0af42f68f2835f17b98)
-•
-[3.5.0](https://github.com/matze/wastebin/tree/d379a6e3e73e6f1fcf23f93c9b0cc857f46acbce)
-•
-[3.4.1](https://github.com/matze/wastebin/tree/c9d717329a6e357e8a13a324bfa9a53d41ae9b35)
-•
-[3.3.0](https://github.com/matze/wastebin/tree/a297749b932ed9ff32569f3af7ee8e4a5b499834)
-•
-[3.2.0](https://github.com/matze/wastebin/tree/3fdec3abde4f32b92323864ffea51577ce1e625e)
-•
-[3.1.0](https://github.com/matze/wastebin/tree/e404ecec61eaafa1187b8d6b45282d72b076563d)
-•
-[3.0.0](https://github.com/matze/wastebin/tree/14a30bb540110e76da6a6045cd0e83fd2218cdd7)
-•
-[2.7.1](https://github.com/matze/wastebin/tree/85a519ef9079c4618f851cce575b5a84334a6f42)
+Building requires Rust 1.95 or later and a C compiler, because SQLite and
+zstd are compiled from source. Run this in the repository root:
 
-## Features
-
-* [axum](https://github.com/tokio-rs/axum) and [sqlite3](https://www.sqlite.org)
-  backend
-* comes as a single binary with low memory footprint
-* compresses pastes using [zstd](https://github.com/facebook/zstd)
-* syntax highlighting for > 170 languages with
-  [syntect](https://github.com/trishume/syntect)
-* renders Markdown pastes to HTML, including GitHub-flavored tables, task lists
-  and admonitions
-* comes with [nine color themes](https://matze.github.io/wastebin/) in light and
-  dark mode
-* encrypts entries using ChaCha20Poly1305 and argon2 hashed passwords
-* allows deletion after expiration, after reading or by anonymous owners
-* shows QR code to browse a paste's URL on mobile devices
-* translated into Chinese and German
-
-### Non-features
-
-* user authentication and admin functionality
-* arbitrary file uploads
-* mitigations for all kinds of DoS attack vectors
-
-> [!CAUTION]
-> Due to lack of authentication and further DoS mitigations, it is not advised
-> to run wastebin facing the internet *as is*. If you plan to do so, you are
-> strongly advised to rate limit inbound requests via iptables rules or a
-> properly configured reverse proxy of your choice.
-
-## Installation
-
-### Run pre-built binaries
-
-You can download pre-built, statically compiled [Linux and MacOS
-binaries](https://github.com/matze/wastebin/releases). After extraction run the
-contained `wastebin` binary.
-
-### Run a Docker image
-
-Alternatively, you can run a pre-built Docker image pushed to
-`quxfoo/wastebin:<VERSION>` and `quxfoo/wastebin:latest` respectively. To
-persist the database as `state.db` via the `WASTEBIN_DATABASE_PATH` environment
-variable use a bind mount to `/path/for/storage` like this
-
-```bash
-docker run \
-    -e WASTEBIN_DATABASE_PATH=/data/state.db \
-    -v /path/for/storage:/data \
-    -u $(id -u):$(id -g) \
-    quxfoo/wastebin:latest
+```sh
+cargo build --release
 ```
 
-> [!NOTE]
-> The image is based on scratch which means it neither comes with a shell nor
-> with `TMPDIR` being set. If database migrations fail with an extended sqlite
-> error code 6410, pass `TMPDIR` pointing to a location sqlite can write to.
+The build writes the server to `target/release/zpaste` and the database tool
+to `target/release/wastebin-ctl`.
 
-### Run with docker-compose
+## Run
 
-```yaml
-services:
-  wastebin:
-    restart: always
-    environment:
-      - WASTEBIN_DATABASE_PATH=/data/state.db
-    ports:
-      - "8088:8088"
-    volumes:
-      - './data:/data'
-    image: 'quxfoo/wastebin:latest'
+Start the server with a database file in the current directory:
+
+```sh
+WASTEBIN_DATABASE_PATH=state.db ./target/release/zpaste
 ```
 
-Make sure the `./data` folder is writable by the user 10001.
+The server listens on `0.0.0.0:8088`. Without `WASTEBIN_DATABASE_PATH` it keeps
+pastes in memory and loses them on exit. Open http://127.0.0.1:8088 in a
+browser, or create a paste from a shell:
 
-### Run with Nix
-
-For Nix users, a `flake.nix` is also provided. Build and execute it directly
-with:
-
-```bash
-nix run 'github:matze/wastebin#wastebin'
+```sh
+curl -s -H 'Content-Type: application/json' \
+    --data '{"text": "# Hello", "extension": "md"}' \
+    http://127.0.0.1:8088/
 ```
 
-Or install the provided `wastebin` package like you normally would.
-
-### Build from source
-
-Install a Rust 2024 toolchain containing Rust 1.85 with
-[rustup](https://rustup.rs) and run the server binary with
-
-```bash
-cargo run --release
-```
-
-### Build a container image
-
-It is possible to build a container image using Docker or Podman. The
-`Dockerfile` is designed to be run on an x86_64 host but capable of building
-images for both x86_64 and aarch64 via the `--target` flag:
-
-```bash
-# Docker
-docker build -t wastebin:v3.0.0 -f Dockerfile --target amd64 .
-docker build -t wastebin:v3.0.0 -f Dockerfile --target arm64 .
-
-# Podman
-podman build -t wastebin:v3.0.0 -f Dockerfile --target amd64
-podman build -t wastebin:v3.0.0 -f Dockerfile --target arm64
-```
-
-Note that you *cannot* build aarch64 images on aarch64 hosts with it.
-
-To interact with a running wastebin instance the bundled `wastebin-ctl` tool can
-be used, e.g.:
-
-```bash
-podman exec -e RUST_LOG=debug -it wastebin /app/wastebin-ctl
-```
-
-## Usage
-
-### Browser interface
-
-When viewing a paste, you can use
-
-* <kbd>r</kbd> to view the raw paste,
-* <kbd>n</kbd> to go the index page,
-* <kbd>y</kbd> to copy the current URL to the clipboard,
-* <kbd>c</kbd> to copy the content to the clipboard,
-* <kbd>q</kbd> to display the current URL as a QR code,
-* <kbd>p</kbd> to view the formatted paste,
-* <kbd>w</kbd> to toggle line wrapping on and off (off by default),
-* <kbd>m</kbd> to toggle the rendered view on Markdown pastes and
-* <kbd>?</kbd> to view the list of keybindings.
-
-To paste some text you can also use the <kbd>ctrl</kbd>+<kbd>s</kbd> key
-combination.
-
-### Markdown rendering
-
-Pastes created with an `md` or `markdown` extension can be viewed as rendered
-HTML at `/md/{id}`. A toggle in the paste view switches between the syntax
-highlighted source and the rendered output. The renderer supports
-GitHub-flavored Markdown, including tables, task lists and admonitions
-(`> [!NOTE]`, `> [!WARNING]`, etc.); fenced code blocks are syntax highlighted
-with the same theme as regular pastes.
-
-Raw HTML inside the Markdown source is run through the
-[ammonia](https://github.com/rust-ammonia/ammonia) sanitizer, so safe tags like
-`<details>`, `<summary>` or `<kbd>` are preserved while `<script>`, inline
-event handlers and `javascript:` URLs are stripped. To permit external images
-embedded via `![alt](https://…)`, the Content Security Policy is relaxed to
-`img-src *` for `/md/*` responses only; all other routes keep the strict
-default.
-
-### Configuration
-
-The following environment variables can be set to configure the server and
-run-time behavior:
-
-| Variable                          | Description                                                   | Default               |
-| --------------------------------- | ------------------------------------------------------------- | --------------------- |
-| `WASTEBIN_ADDRESS_PORT`           | Address and port to bind the server to.                       | `0.0.0.0:8088`        |
-| `WASTEBIN_BASE_URL`               | Base URL for the QR code display.                             |                       |
-| `WASTEBIN_CACHE_SIZE`             | Number of rendered items to cache.                            | `128`                 |
-| `WASTEBIN_DATABASE_PATH`          | Path to the sqlite3 database file.                            | `:memory:`            |
-| `WASTEBIN_HTTP_TIMEOUT`           | Maximum number of seconds a request is processed until wastebin responds with 408. | `5` |
-| `WASTEBIN_MAX_BODY_SIZE`          | Number of bytes to accept for POST requests.                  | `1048576`, i.e. 1 MB  |
-| `WASTEBIN_PASSWORD_SALT`          | Salt used to hash user passwords used for encrypting pastes.  | `somesalt`            |
-| `WASTEBIN_PASTE_EXPIRATIONS`      | Possible paste expirations as a comma-separated list of seconds or values with duration magnitudes (`s`, `m`, `h`, `d`, `M`, `y` for seconds, minutes, hours, days, months and years respectively). Appending `=d` to one of the value makes it the default selection. | see [here](https://github.com/matze/wastebin/blob/eb61c78506a165605f145e8374ed64822405eda0/crates/wastebin_server/src/env.rs#L166) |
-| `WASTEBIN_SIGNING_KEY`            | Key to sign cookies. Must be at least 64 bytes long.          | Random key generated at startup, i.e. cookies will become invalid after restarts and paste creators will not be able to delete their pastes. |
-| `WASTEBIN_THEME`                  | Theme colors, one of `ayu`, `base16ocean`, `catppuccin`, `coldark`, `gruvbox`, `monokai`, `onehalf`, `rosepine`, `solarized`. See [this page](https://matze.github.io/wastebin/) for a preview. | `ayu` |
-| `WASTEBIN_TITLE`                  | HTML page title. Pastes with their own title use that title instead. | `wastebin`            |
-| `WASTEBIN_UNIX_SOCKET_PATH`       | Path to a Unix socket to accept connections from.             |                       |
-| `RUST_LOG`                        | Log level. Besides the typical `trace`, `debug`, `info` etc. keys, you can also set the `tower_http` key to a log level to get additional request and response logs. |  |
-
-> [!NOTE]
-> `WASTEBIN_ADDRESS_PORT` and `WASTEBIN_UNIX_SOCKET_PATH` are mutually
-> exclusive, which means that setting both will lead to an error. Setting
-> neither will implicitly bind via TCP on `0.0.0.0:8088`.
-
-### API endpoints
-
-POST a new paste to the `/` endpoint with the following JSON payload:
-
-```text
-{
-  "text": "<paste content>",
-  "extension": "<file extension, optional>",
-  "title": "<paste title, optional>",
-  "expires": <number of seconds from now, optional>,
-  "burn_after_reading": <true/false, optional>,
-  "password": <password for encryption optional>,
-  "owner": "<owner token from a previous insert, optional>"
-}
-```
-
-After successful insertion, you will receive a JSON response with the path to
-the newly created paste and a signed `owner` token authorizing deletion:
+The response names the new paste and an owner token that can delete it:
 
 ```json
-{"path":"/Ibv9Fa.rs","owner":"<signed token>"}
+{"path":"/<id>.md","owner":"<token>"}
 ```
 
-By default every insert gets its own owner identity. Passing the `owner` token
-of a previous insert back in the `owner` field makes the new paste reuse that
-identity, letting a client group several pastes under a single owner. An absent
-or invalid token mints a fresh identity. Note that a reused token is a shared
-credential: whoever holds it can delete every paste created under it.
+`curl http://127.0.0.1:8088/raw/<id>` returns the stored text. The
+configuration variables, the rest of the HTTP API and `wastebin-ctl` are
+described in [wastebin's README](docs/upstream/WASTEBIN-README.md#configuration).
 
-To retrieve the raw content, make a GET request on the `/raw/:id` route. In case
-the paste was encrypted, pass the password via the `wastebin-password` header.
+## Container image
 
-To delete a paste, make a DELETE request on the `/:id` route with the `uid`
-cookie set. A browser obtains that cookie by opening `/<id>?owner=<token>` with
-the `owner` token from the insert response: the server validates the token,
-appends the uid to the signed `uid` cookie and redirects to the clean paste URL.
-The form-based UI sets the same cookie in the `Set-Cookie` header of the
-redirect response after creation.
+The Dockerfile cross-compiles static musl executables and is meant for an
+x86_64 host. Build the x86_64 image in the repository root:
 
-### wastebin-ctl command line tool
-
-`wastebin-ctl` is a command line tool to interact directly with the wastebin
-database. It can be used to `list` all entries, `purge` entries which have
-expired or `delete` specific entries. To specify the database either use the
-`--database` option or set the `WASTEBIN_DATABASE_PATH` environment variable as
-usual.
-
-### Paste from neovim
-
-Use the [wastebin.nvim](https://github.com/matze/wastebin.nvim) plugin and paste
-the current buffer or selection with `:WastePaste`.
-
-### Paste from clipboard
-
-To paste clipboard data from the command line you can use the aforementioned API
-calls together with `xclip`, `curl` and `jq`. Define the following function in
-your `.bashrc` and you are good to go:
-
-```bash
-function paste_from_clipboard() {
-    local API_URL="https://wastebin.tld"
-    local URL=$(\
-        jq -n --arg t "$(xclip -selection clipboard -o)" '{text: $t}' | \
-            curl -s -H 'Content-Type: application/json' --data-binary @- ${API_URL}/ | \
-            jq -r '. | "'${API_URL}'\(.path)"' )
-
-    xdg-open $URL
-}
+```sh
+docker build --target amd64 -t zpaste .
 ```
 
-For wayland users, consider replace the `xclip ...` with `wl-paste` from
-`wl-clipboard`.
+The image runs `/app/zpaste` as user 10001.
 
-### Paste from stdin
+## Test
 
-To paste from stdin use the following function in your `.bashrc`:
-
-```bash
-function paste_from_stdin() {
-    local API_URL="https://wastebin.tld"
-    jq -Rns '{text: inputs}' | \
-        curl  -s -H 'Content-Type: application/json' --data-binary @- ${API_URL}/ | \
-        jq -r '. | "'${API_URL}'\(.path)"'
-}
+```sh
+cargo test
 ```
 
-It can be handy for creating pastes from logs or the output of commands, e.g.
-`cat file.log | paste_from_stdin`.
+## Planned
+
+- A reading page that renders Markdown with an outline, and shows code, logs
+  and diffs in views suited to each.
+- Editing a paste at the same URL, with version history.
+- A versioned HTTP API under `/v1` and a command-line client.
+
+## Upstream documents
+
+wastebin's README, changelog and contribution guide are kept in
+[docs/upstream](docs/upstream/README.md) for reference. They describe wastebin
+and will drift from Zpaste.
 
 ## License
 
-[MIT](./LICENSE)
+Zpaste is released under the [MIT license](LICENSE). The license keeps
+Matthias Vogelgesang's copyright for wastebin and adds Zakkaus's copyright for
+Zpaste.
