@@ -8,15 +8,19 @@ Zpaste 基于 Matthias Vogelgesang 的 [wastebin](https://github.com/matze/waste
 
 ## 状态
 
-Zpaste 仍处于早期开发阶段。目前的行为与上游 wastebin 提交 `c0ec968` 相同，区别只有服务器可执行文件名为 `zpaste`，以及日志行的 target 显示为 `zpaste`。配置变量仍使用 `WASTEBIN_` 前缀，HTTP API 也与 wastebin 相同。
+Zpaste 仍处于早期开发阶段，以上游 wastebin 提交 `c0ec968` 为基础，目前有三项改动：`/v1` API；由 `web/` 中的 Web 应用在浏览器中绘制的阅读页（`GET /<id>[.<ext>]`，`/md/<id>` 会重定向到这里）；服务器可执行文件名为 `zpaste`，日志行的 target 也显示为 `zpaste`。配置变量仍使用 `WASTEBIN_` 前缀，wastebin 原有的 HTTP API（`POST /`、`/raw`、`/dl`）照常可用。
 
 ## 构建
 
-构建需要 Rust 1.95 或更高版本和 C 编译器，因为 SQLite 和 zstd 从源码编译。在仓库根目录执行：
+构建需要 Rust 1.95 或更高版本和 C 编译器，因为 SQLite 和 zstd 从源码编译。服务器在构建时嵌入 `web/` 中的 Web 应用，所以要先构建它，这一步需要 Node.js 22.18 或更高版本和 pnpm 11。在仓库根目录执行：
 
 ```sh
+pnpm --dir web install --frozen-lockfile
+pnpm --dir web build
 cargo build --release
 ```
+
+没有 `web/dist` 时，`cargo build` 会发出警告，构建出的服务器阅读页只会提示缺少 Web 应用；两种情况下测试都会通过。
 
 服务器输出到 `target/release/zpaste`，数据库工具输出到 `target/release/wastebin-ctl`。
 
@@ -52,7 +56,7 @@ Dockerfile 交叉编译静态链接 musl 的可执行文件，设计为在 x86_6
 docker build --target amd64 -t zpaste .
 ```
 
-镜像以用户 10001 运行 `/app/zpaste`。
+镜像构建会自行构建 Web 应用。镜像以用户 10001 运行 `/app/zpaste`。
 
 ## 测试
 

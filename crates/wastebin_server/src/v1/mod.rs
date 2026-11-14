@@ -1,7 +1,7 @@
 //! The `/v1` JSON API (plan section 四). `docs/api/openapi.yaml` is its contract, generated from
 //! the annotations in this module by the `contract` tests.
 
-mod auth;
+pub(crate) mod auth;
 mod content;
 #[cfg(test)]
 mod contract;

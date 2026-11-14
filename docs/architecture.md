@@ -31,8 +31,8 @@ what fails when it is broken, so a change can be judged against it.
 | 1 | The `/v1` handlers and the legacy routes call the same service functions. A legacy route is an adapter that translates the request and the response, nothing more. | Two entry points grow two sets of rules, and an anonymous `curl` gets behaviour the web page does not. | Target, P1 |
 | 2 | `WASTEBIN_SIGNING_KEY` and `WASTEBIN_PASSWORD_SALT` carry over unchanged across every deployment, including the upstream default salt `somesalt` when none was set. | Every owner token stops verifying, and every encrypted paste becomes unreadable. | Current (upstream reads both); kept by the runbook |
 | 3 | A burn-after-reading paste is consumed only by `POST /v1/pastes/{id}/content` with `confirm_burn`. No `GET` consumes content. | A link preview, a crawler or a page reload burns the paste before the reader sees it. | Target, P1 |
-| 4 | The HTML shell of an encrypted or burn-after-reading paste carries no content, no title and no summary. | The content or its title reaches link previews, caches and anyone with the URL. | Target, P1 |
-| 5 | Content embedded in the HTML shell is JSON with `<`, `>`, `&`, U+2028 and U+2029 escaped; Open Graph attributes and `<noscript>` text use HTML escaping; the Content Security Policy allows no inline script. | A paste containing `</script>` ends the data block early and runs as script on the paste's origin. | Target, P1 |
+| 4 | The page `GET /<id>` serves for an encrypted or burn-after-reading paste carries no content, no title and no summary. | The content or its title reaches link previews, caches and anyone with the URL. | Current (P1 slice 4, `web::tests`) |
+| 5 | Content embedded in the HTML shell is JSON with `<`, `>`, `&`, U+2028 and U+2029 escaped; Open Graph attributes and `<noscript>` text use HTML escaping; the Content Security Policy allows no inline script. | A paste containing `</script>` ends the data block early and runs as script on the paste's origin. | Current (P1 slice 4, `web::shell::tests`) |
 | 6 | A version id is a SHA-256 over the parent id, the stored bytes (the ciphertext for an encrypted paste) and the title (presence flag, length and bytes). | Someone without the password confirms a guessed plaintext by hashing it, or an `ETag` matches content it does not describe. | Target, P1 |
 | 7 | Editing an encrypted paste first decrypts the current content with the supplied password; a failure returns 401 and writes nothing. | A mistyped password silently becomes the paste's new password. | Target, P2 |
 | 8 | A write authenticated by cookie must carry an `Origin` equal to the configured public URL (scheme, host and port); forwarded headers are not trusted. Bearer requests skip this check. | Another site makes the reader's browser edit or delete their pastes (CSRF). | Target, P1 |
@@ -43,8 +43,8 @@ what fails when it is broken, so a change can be judged against it.
 | 13 | The OpenAPI file is generated from the Rust handlers, and the frontend types are generated from that file; neither is edited by hand. | Server and client drift apart while both still compile. | Target, P0 draft, P1 checks |
 | 14 | A failed migration stops the server before it serves traffic. | The server accepts requests against a half-migrated schema and writes bad rows. | Current (upstream migrates at start-up) |
 | 15 | Logs never contain `Authorization`, `X-Paste-Password`, the `owner` query parameter or the body of a create response. | An owner token or a password is readable by anyone with log access. | Target, P1 |
-| 16 | `?owner=` is exchanged before any HTML is produced: the server stores the token in a cookie and answers 302 to the same URL without the token, with `no-store`. | The token stays in browser history, `Referer` headers and caches. | Current (cookie and 302, `paste.rs`); Target, P1 (`no-store`) |
-| 17 | A reading page's Content Security Policy is upstream's strict base plus `connect-src 'self'` and `img-src 'self' https: data:`; no other page widens `img-src`. Images from a paste load lazily and send no `Referer`. | Too strict: every image in a Markdown paste is blocked, which upstream's `/md/` route allowed (`img-src *`). Too wide: another page loads images it never meant to, or a paste's URL reaches an image's host. | Target, P1 slice 4 (the shell sets the header); the app side is in place |
+| 16 | `?owner=` is exchanged before any HTML is produced: the server stores the token in a cookie and answers 302 to the same URL without the token, with `no-store`. | The token stays in browser history, `Referer` headers and caches. | Current (P1 slice 4: also for a token that fails, `web::tests`) |
+| 17 | A reading page's Content Security Policy is upstream's strict base plus `connect-src 'self'` and `img-src 'self' https: data:`; no other page widens `img-src`. Images from a paste load lazily and send no `Referer`. | Too strict: every image in a Markdown paste is blocked, which upstream's `/md/` route allowed (`img-src *`). Too wide: another page loads images it never meant to, or a paste's URL reaches an image's host. | Current (P1 slice 4) |
 
 ## System context
 
@@ -179,7 +179,7 @@ flowchart LR
 
 | Part | Responsibility | Notes |
 | --- | --- | --- |
-| Image build | Three stages: Node builds the web app, Rust builds a static musl executable that embeds it, a minimal base (distroless or scratch) runs it as uid 10001. | The CI change is a separate P0 task. |
+| Image build | Three stages: Node builds the web app, Rust builds a static musl executable that embeds it, a minimal base (distroless or scratch) runs it as uid 10001. | Current: `Dockerfile` (stages `web`, `builder`, `amd64`), built by `image.yml`. |
 | Registry | `ghcr.io/zakkaus/zpaste:<version>`. Compose pins the digest, not the tag, so a rollback is a digest swap. | The version scheme is open. |
 | Configuration | `/etc/zpaste/env`, root 600, values moved from the current setup unchanged (invariant 2). Variables keep the `WASTEBIN_` prefix. New in P1: `WASTEBIN_KDF_RATE` and `WASTEBIN_TRUSTED_PROXIES` ("Reliability"). | The trusted proxy range for matrix is read from the host at release ([workflow.md](workflow.md)). |
 | Data | `/var/lib/zpaste/state.db`, owned by uid 10001. Backups cover `/var/lib/zpaste`. | The backup schedule is open. |
@@ -187,8 +187,9 @@ flowchart LR
 
 ## Serving a page: HTML shell, embedded JSON, browser app
 
-Target, P1. The server renders a thin HTML shell for every reading page; the
-browser app renders the content. The server outputs only four things beyond
+Current from P1 slice 4, except the password and burn screens (P1 frontend).
+The server renders a thin HTML shell for every reading page; the browser app
+renders the content. The server outputs only four things beyond
 static files:
 
 1. Open Graph tags (title, type, the first lines) so a Telegram preview shows
@@ -197,17 +198,42 @@ static files:
    app does not fetch it a second time. The shape and the escaping are defined
    once, in `web/src/shell/embedded.ts`; the shell writes exactly that. Its
    optional `can_edit` says whether the request's owner credentials (cookie or
-   Bearer) may edit the paste, which shows the page's Edit action; the shell
-   fills it from P1 slice 4, and absent means false. It only hides a button:
-   every write is still checked on the server.
+   Bearer, chosen as `/v1` chooses them; a Bearer token that fails counts as
+   none) may edit the paste, which shows the page's Edit action; absent means
+   false. It only hides a button: every write is still checked on the server.
 3. A `<noscript>` block with the plain text, so a reader without JavaScript can
    still read an ordinary paste.
 4. The `?owner=` exchange (invariant 16), done before any HTML. Upstream
    already does it; `no-store` is the P1 addition.
 
-Encrypted and burn-after-reading pastes get a shell with a generic title and no
-content (invariant 4). They cannot be read without JavaScript. Pastes are served
-with `noindex`; the help page on gentoozh.org stays indexable.
+The preview's title is the paste's title, else its first non-blank line
+without a Markdown heading's `#`; the summary is the next four non-blank
+lines; both are cut at 80 and 200 characters. The `<noscript>` text wraps by a
+hashed stylesheet, so it does not scroll sideways either.
+
+Until the app has its password and burn screens (P1 frontend), an encrypted
+or burn-after-reading paste does not get the shell: `GET /<id>` serves
+upstream's HTML form, which posts back to `POST /<id>` (A5). A
+burn-after-reading paste, encrypted or not, gets the burn confirmation, and
+nothing is consumed until the reader confirms; an encrypted one gets the
+password form, with `no-store`. Neither form shows the paste's title
+(invariant 4), and the page reads only the paste's flags, never its bytes.
+The app's screens replace these forms when they land. A missing, expired or
+malformed id gets the shell with no paste and 404 (A4).
+Pastes are served with `noindex`; the help page on gentoozh.org stays
+indexable.
+
+The shell is `no-store`, because `can_edit` depends on the reader's
+credentials. The `?owner=` answer is a 302 with `no-store`, also when the token
+fails, so no token stays in the URL.
+
+`pnpm build` writes `web/dist`, and `crates/wastebin_server/build.rs` embeds
+it in the executable with `include_bytes!`. Without it the build warns and
+embeds a placeholder page, so `cargo build` and `cargo test` need no Node; the
+Dockerfile and the CI job that runs `cargo test` set `ZPASTE_REQUIRE_WEB=1`,
+which turns that into an error, so the server's tests check the real build. The
+files are served from memory, precompressed once per process; Vite's hashed
+`/assets/` files are immutable for 30 days, the others revalidate.
 
 Why this split:
 
@@ -241,18 +267,28 @@ when it has one, otherwise from the extension stored at creation, otherwise
 plain text. Other app routes are `/<id>/edit`, `/<id>/history`, `/` (new paste),
 `/w/<slug>` (workspace) and `/w/<slug>/<name>` (one entry of it).
 
-The Content Security Policy keeps upstream's strict base and adds
-`connect-src 'self'`; reading pages also allow `img-src 'self' https: data:`
-(invariant 17), as upstream allowed images on `/md/`. The app draws a Markdown
+The reading page's Content Security Policy keeps upstream's strict base and adds
+`connect-src 'self'` and `img-src 'self' https: data:` (invariant 17), as
+upstream allowed images on `/md/`; every other page keeps upstream's policy.
+`crates/wastebin_server/src/csp.rs` defines the base once and derives every
+wider policy from it. The app draws a Markdown
 image with `loading="lazy"` and `referrerpolicy="no-referrer"`, and an image
 that is blocked or fails to load gives way to its alt text in brackets.
 `web/scripts/shoot.ts` serves every page with this policy and fails on any
 violation other than the image it means to be blocked. Upstream's
 `style-src 'self' data:` blocks the two `<style>` elements Astryx inserts at
 run time (CodeBlock's highlight colours, `data-astryx-highlight-styles`, and
-the layer slide rules, `#astryx-layer-slide-rules`), so code would lose its
-colours; how the policy admits them is open (A13). The start-up script is an
-external file. The only
+the layer slide rules, `#astryx-layer-slide-rules`), so the policy admits
+exactly those two texts by their `sha256` hashes, never `'unsafe-inline'`
+(A13). `pnpm build` computes them: `web/scripts/style-hashes.ts` runs the two
+Astryx modules the bundle is built from and writes `dist/style-src.txt`, which
+the server embeds and `shoot.ts` serves. It also writes
+`dist/svg-style-src.txt` with the hashes of each SVG file's own `<style>`
+elements (the favicon's light and dark colours), which the server admits on
+that file's response only. An Astryx upgrade that changes either
+text changes its hash in the same build; a hash that does not match shows as a
+violation in `shoot.ts`, in CI against `dist/` and locally against a server
+(`ZPASTE_SERVER`). The start-up script is an external file. The only
 escaping Zpaste writes itself is the shell's JSON embedding (invariant 5);
 everything the app renders relies on the libraries: Astryx `Markdown` turns
 Markdown into React elements and never renders raw HTML, mermaid runs with
@@ -261,11 +297,13 @@ Markdown into React elements and never renders raw HTML, mermaid runs with
 A paste too large to draw in one short task is shown as plain text under a
 notice, with no outline (`web/src/reader/renderPlan.ts`): Markdown past
 100,000 characters, and past 1,000,000 characters only the start, with Raw
-and Download for the whole paste. The shell still embeds the whole content;
-whether it stops embedding past a size and the app fetches the raw text
-instead is decided with P1 slice 4. A page whose embedded paste is missing or
-cannot be parsed, or whose rendering throws, shows an error screen with a
-link to `/raw/<id>` instead of a blank page.
+and Download for the whole paste. The shell embeds the whole content at any
+size: the app has no other way to get it yet, and `WASTEBIN_MAX_BODY_SIZE`
+bounds it. A page whose embedded paste is missing or
+cannot be parsed, or whose rendering throws, shows an error screen instead of
+a blank page. It links `/raw/<id>` only when the page carried the paste, which
+the shell embeds for an ordinary paste alone: with nothing embedded the paste
+may be gone or burn-after-reading, and `GET /raw/<id>` consumes the latter.
 
 ## API layer
 
@@ -447,10 +485,10 @@ Target, P1:
 | Route | Becomes |
 | --- | --- |
 | `POST /`, `/raw/<id>`, `DELETE /<id>` | Thin adapters over the `/v1` services (invariant 1). One set of scenario tests runs against both paths. Current for `POST /`, `POST /new`, `/raw/<id>` and `/dl/<id>`: they call `crates/wastebin_server/src/service.rs`, as `/v1` does, and keep upstream's statuses (403 for a wrong password, the HTML password form for a missing one); `/raw` and `/dl` consume a burn paste on read, as upstream did. `v1::tests::legacy` runs the scenarios through every create route and every read route: `/raw`, `/dl`, the HTML page and `/v1`. |
-| `/md/<id>.<ext>` | 302 to `/<id>.<ext>`. |
+| `/md/<id>.<ext>` | 302 to `/<id>.<ext>`. Current: the upstream view, its `POST` forms and its `img-src *` are removed. |
 | `/burn`, `/dl`, `/qr` | Kept. |
-| `GET /<id>[.<ext>]` | The HTML shell. |
-| `POST /{id}` | Open. Today it takes the password and burn confirmation from upstream's HTML form; the app uses `POST /v1/pastes/{id}/content` instead. |
+| `GET /<id>[.<ext>]` | The HTML shell. Current for ordinary and missing pastes; an encrypted or burn-after-reading paste gets upstream's form until the app's screens land (see "Serving a page"). |
+| `POST /{id}` | Open. Today it takes the password and burn confirmation from upstream's HTML form, which `GET /<id>` of a sealed paste, `/raw/<id>` and this route show; the app uses `POST /v1/pastes/{id}/content` instead, once its own screens replace the form. |
 | `POST /new`, `POST /delete/{id}`, `/theme` | Open. They serve upstream's HTML forms, which are removed. |
 
 The upstream askama templates, CSS and JavaScript are removed when the shell
@@ -561,6 +599,8 @@ reasoning is in the sections above and in the plan.
 | Contract source | Hand-written OpenAPI; generated from Rust | Generated from Rust (plan section 四) | Handler annotations to keep up | None known |
 | Fixed names for agents | Local names in gzpaste; server-side workspaces | Workspaces (plan section 四) | Two new tables | None known |
 | CLI language | Shell; Rust | Rust, in this repository (owner, 2026-11-14) | A second binary to build | None known |
+| Run-time styles in the reading page's policy | `sha256` hashes; `'unsafe-inline'` for styles | Hashes computed by `pnpm build` from the Astryx modules in the bundle (A13) | An Astryx version that renames an injector fails the build until `style-hashes.ts` follows | A third run-time `<style>` appears |
+| Embedding `web/dist` | `rust-embed`; `include_dir`; a build script | A build script with `include_bytes!`: it also reads the style hashes and checks the template, and adds no dependency | One generated file to read when debugging | The build needs per-file metadata a crate already provides |
 | Diagram format in these documents | Mermaid; text trees | Mermaid: GitHub renders it in the repository and in pull requests, it is text that diffs by line, and edge labels carry the data flow. Text trees stay in the plan. | Raw Mermaid is harder to read in a terminal | GitHub stops rendering it |
 
 ## Open items
@@ -572,7 +612,7 @@ Points the plan does not decide. Each blocks the phase named.
 | A1 | Settled 2026-11-15: utoipa 6.0.0, openapi-typescript 7.13.0 (with TypeScript 5.9.3) and openapi-fetch 0.17.0 work together; evidence and gaps in `docs/api/README.md`, "Generating the contract in P1". | P0 (contract draft) |
 | A2 | Image version scheme for `ghcr.io/zakkaus/zpaste:<version>`. | P0 (CI) |
 | A3 | Value of the per-IP derivation rate (built in P1 with a default of 10 per minute and a burst of 10, `WASTEBIN_KDF_RATE`, awaiting the owner), and confirmation of the concurrency default (2, `WASTEBIN_KDF_CONCURRENCY`). | P1 |
-| A4 | Whether the shell answers HTTP 404 or 200 for a missing or expired id (the app shows the same screen either way). | P1 |
+| A4 | Whether the shell answers HTTP 404 or 200 for a missing or expired id (the app shows the same screen either way). P1 slice 4 keeps upstream's 404 until the owner decides. | P1 |
 | A5 | Fate of `POST /{id}`, `POST /new`, `POST /delete/{id}` and `/theme` once the upstream forms are gone. | P1 |
 | A6 | Fate of `wastebin_highlight` and `wastebin_theme_showcase` once the server stops highlighting. | P1 |
 | A7 | The test domain on which the new frontend is accepted before the switch (plan section 七). | P1 |
@@ -581,4 +621,4 @@ Points the plan does not decide. Each blocks the phase named.
 | A10 | Settled 2026-11-15 (「單一 paste 的歷史總大小 可以」): the cap is 4 × `WASTEBIN_MAX_BODY_SIZE` per paste, and trimming the oldest versions until both limits hold may leave fewer than 20; see "Revisions" and `docs/api/README.md`, "Owner rulings". | P2 |
 | A11 | Whether history may branch (left to Zephyr). | After P2 |
 | A12 | How a squatted slug is reclaimed without an admin panel, and what removes empty workspaces after 30 days. | P2b |
-| A13 | How the reading page's policy admits Astryx's two run-time `<style>` elements: their `sha256` hashes (exact, but pinned to the Astryx version, so an upgrade must update them) or `'unsafe-inline'` for styles only (the app renders no raw HTML, so only CSS from Astryx reaches the page). `shoot.ts` uses `'unsafe-inline'` until this is decided. | P1 slice 4 |
+| A13 | Settled with P1 slice 4: `sha256` hashes, computed by `pnpm build` (see "Serving a page"). | P1 slice 4 |

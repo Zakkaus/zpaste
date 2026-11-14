@@ -78,9 +78,9 @@ mod tests {
         // Location is the `/burn/foo` page not the paste itself, so remove the prefix.
         let location = location.replace("burn/", "");
 
-        // First GET shows the confirmation interstitial without revealing content.
+        // A post without confirmation shows upstream's interstitial without revealing content.
         let res = client
-            .get(&location)
+            .post(&location)
             .header(header::ACCEPT, "text/html; charset=utf-8")
             .send()
             .await?;
@@ -91,9 +91,9 @@ mod tests {
         assert!(body.contains(">reveal<"));
         assert!(!body.contains("secret-body-xyz"));
 
-        // Second GET must still show the confirmation — the paste is not yet burned.
+        // A second one must still show the confirmation — the paste is not yet burned.
         let res = client
-            .get(&location)
+            .post(&location)
             .header(header::ACCEPT, "text/html; charset=utf-8")
             .send()
             .await?;
@@ -193,9 +193,9 @@ mod tests {
         // Location is the `/burn/foo` page not the paste itself, so remove the prefix.
         let location = location.replace("burn/", "");
 
-        // First GET shows the burn confirmation interstitial.
+        // A post without confirmation shows the burn confirmation interstitial.
         let res = client
-            .get(&location)
+            .post(&location)
             .header(header::ACCEPT, "text/html; charset=utf-8")
             .send()
             .await?;
@@ -259,7 +259,7 @@ mod tests {
             .to_str()?
             .replace("burn/", "");
 
-        // Hit the URL a handful of times — none of these should burn the paste.
+        // Open the reading page a handful of times: none of these burns the paste or carries it.
         for _ in 0..5 {
             let res = client
                 .get(&location)
@@ -267,8 +267,17 @@ mod tests {
                 .send()
                 .await?;
             assert_eq!(res.status(), StatusCode::OK);
-            assert!(res.text().await?.contains(">reveal<"));
+            assert!(!res.text().await?.contains("zpaste-paste"));
         }
+
+        let res = client
+            .post(&location)
+            .form(&[("confirm_burn", "1")])
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let res = client.get(&location).send().await?;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
 
         Ok(())
     }

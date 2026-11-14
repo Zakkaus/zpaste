@@ -263,14 +263,19 @@ mod tests {
         let res = client.post_json().json(&entry).send().await?;
         let payload = res.json::<super::RedirectResponse>().await?;
 
-        // Visit the magic link, server should redirect to clean URL with Set-Cookie.
+        // Visit the magic link, server should redirect to clean URL with Set-Cookie, and no
+        // cache keeps the answer (invariant 16).
         let res = client
             .get(&payload.path)
             .query(&[("owner", &payload.owner)])
             .send()
             .await?;
-        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(res.status(), StatusCode::FOUND);
         assert_eq!(res.headers().get("location").unwrap(), &payload.path);
+        assert_eq!(
+            res.headers().get(reqwest::header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
         assert!(
             res.headers()
                 .get_all(reqwest::header::SET_COOKIE)
@@ -290,7 +295,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalid_owner_renders_normally() -> Result<(), Box<dyn std::error::Error>> {
+    async fn invalid_owner_is_dropped_from_the_url() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(StoreCookies(false)).await;
 
         let entry = Entry {
@@ -306,7 +311,8 @@ mod tests {
             .header(reqwest::header::ACCEPT, "text/html; charset=utf-8")
             .send()
             .await?;
-        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.status(), StatusCode::FOUND);
+        assert_eq!(res.headers().get("location").unwrap(), &payload.path);
         assert!(
             !res.headers().contains_key(reqwest::header::SET_COOKIE),
             "invalid token must not set a cookie",

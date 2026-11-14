@@ -14,19 +14,28 @@ burn-after-reading code.
 
 ## Status
 
-Zpaste is in early development. Its behaviour currently equals upstream
-wastebin at commit `c0ec968`, except that the server executable is named
-`zpaste` and log lines name `zpaste` as their target. Configuration variables
-keep the `WASTEBIN_` prefix, and the HTTP API is wastebin's.
+Zpaste is in early development. It is upstream wastebin at commit `c0ec968`
+with three changes so far: the `/v1` API; a reading page that the web app in
+`web/` draws in the browser (`GET /<id>[.<ext>]`, where `/md/<id>` now
+redirects); and the server executable named `zpaste`, whose log lines name
+`zpaste` as their target. Configuration variables keep the `WASTEBIN_` prefix,
+and wastebin's HTTP API (`POST /`, `/raw`, `/dl`) keeps working.
 
 ## Build
 
 Building requires Rust 1.95 or later and a C compiler, because SQLite and
-zstd are compiled from source. Run this in the repository root:
+zstd are compiled from source. The server embeds the web app in `web/` at
+build time, so build that first, with Node.js 22.18 or later and pnpm 11. Run
+this in the repository root:
 
 ```sh
+pnpm --dir web install --frozen-lockfile
+pnpm --dir web build
 cargo build --release
 ```
+
+Without `web/dist`, `cargo build` warns and builds a server whose reading pages
+only say that the web app is missing; the tests pass either way.
 
 The build writes the server to `target/release/zpaste` and the database tool
 to `target/release/wastebin-ctl`.
@@ -68,7 +77,8 @@ x86_64 host. Build the x86_64 image in the repository root:
 docker build --target amd64 -t zpaste .
 ```
 
-The image runs `/app/zpaste` as user 10001.
+The image build builds the web app itself. The image runs `/app/zpaste` as
+user 10001.
 
 ## Test
 

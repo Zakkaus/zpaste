@@ -7,7 +7,9 @@ import {pasteIdFromPath} from './shell/location';
 /**
  * Only the reading page of an embedded paste exists so far; other pages follow the first screen's
  * approval. A page without a readable paste, or one that fails to draw, shows the error state instead
- * of a blank page.
+ * of a blank page. The error state links the raw text only when the page did carry the paste, which the
+ * server embeds for an ordinary paste alone: a page with nothing embedded may be for a paste that is
+ * gone, or for a burn-after-reading paste, which `GET /raw/<id>` consumes.
  */
 export function App() {
   const id = pasteIdFromPath(window.location.pathname);
@@ -20,5 +22,6 @@ export function App() {
 
 function Reader({id}: {id: string | null}) {
   const read = readEmbeddedPaste(document);
-  return read.state === 'found' ? <ReaderPage data={read.data} /> : <ErrorPage reason="missing" id={id} />;
+  if (read.state === 'found') return <ReaderPage data={read.data} />;
+  return <ErrorPage reason="missing" id={read.state === 'malformed' ? id : null} />;
 }

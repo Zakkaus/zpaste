@@ -17,7 +17,8 @@ const styles = stylex.create({
 /**
  * The reading page's error state, in the reading page's frame: what happened and what to do next
  * (docs/design-language.md, "States"). `missing`: the page carries no readable paste; `render`: drawing
- * it failed. With the paste's id, the raw text is one link away.
+ * it failed. With the paste's id, the raw text is one link away; the caller passes the id only for an
+ * ordinary paste (App.tsx).
  */
 export function ErrorPage({reason, id}: {reason: 'missing' | 'render'; id: string | null}) {
   return (

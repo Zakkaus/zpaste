@@ -2,14 +2,33 @@
 # aarch64-unknown-linux-musl targets using zig to link against musl libc. Note
 # that this is to be used from an x86_64 host.
 #
-# Every input of the builder is pinned, because the release ships the
-# executables built here: the base image by digest, zig by the sha256 that
-# ziglang.org publishes, cargo-zigbuild by version. Move them together, and
-# record the new tag, checksums and version in the comments below.
+# The web stage builds web/ (the reading page); the builder embeds its
+# web/dist in the executable and refuses to build without it
+# (ZPASTE_REQUIRE_WEB, crates/wastebin_server/build.rs).
+#
+# Every input of both build stages is pinned, because the release ships the
+# executables built here: the base images by digest, pnpm by version and the
+# web dependencies by web/pnpm-lock.yaml, zig by the sha256 that ziglang.org
+# publishes, cargo-zigbuild by version. Move them together, and record the new
+# tag, checksums and version in the comments below.
 #
 # CARGO_TARGETS lists the targets to build; the default builds only the one
 # the amd64 stage needs. The arm64 stage needs
 # --build-arg CARGO_TARGETS=aarch64-unknown-linux-musl.
+
+# --- web app
+
+# node:24.22.3-bookworm-slim (index digest of the tag when it was pinned)
+FROM node:24.22.3-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 AS web
+
+# The version web/package.json names in packageManager.
+RUN npm install --global pnpm@11.15.1
+
+WORKDIR /web
+COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY web/ ./
+RUN pnpm build
 
 # --- build image
 
@@ -43,6 +62,8 @@ RUN cargo install --locked --version 0.24.1 cargo-zigbuild
 WORKDIR /app
 
 COPY . .
+COPY --from=web /web/dist web/dist
+ENV ZPASTE_REQUIRE_WEB=1
 
 RUN set -eu; \
     args=""; \

@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/style-hashes.ts",
     "lint": "eslint . && node scripts/lint-css.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
