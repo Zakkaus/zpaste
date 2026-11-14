@@ -19,6 +19,13 @@ prerelease and the image tag `0.1.0-beta.1`.
   burn-after-reading paste. A paste's versions are deleted with it. The
   database file grows by about the size of the stored pastes, and an older
   executable refuses the migrated database, so a rollback restores the backup.
+- The `/v1` JSON API, first operations: `GET /v1`, `POST /v1/pastes`,
+  `GET /v1/pastes/{id}`, `DELETE /v1/pastes/{id}` and
+  `GET /v1/pastes/{id}/content` (plain pastes; encrypted and
+  burn-after-reading pastes answer 409 and are never consumed). Every `/v1`
+  response carries `X-Request-Id` and `Cache-Control: no-store`, and every
+  `/v1` error, the framework's included, uses one JSON shape.
+  `docs/api/openapi.yaml` is now generated from the handlers.
 
 ### Changed
 

@@ -287,12 +287,14 @@ file, committed to the repository; openapi-typescript turns it into frontend
 types; openapi-fetch is the typed client. All three are pinned (A1, settled
 in P0): utoipa 6.0.0, openapi-typescript 7.13.0 with TypeScript 5.9.3, and
 openapi-fetch 0.17.0; `docs/api/README.md` records the check and what utoipa
-cannot express. CI regenerates both outputs and
-compares them byte for byte, type-checks the frontend, and runs a contract test
-that starts the server in-process and sends every row of the endpoint table
-implemented so far, each error status included, validating status, headers
-and body against the OpenAPI file. The regeneration check alone cannot show
-that a handler answers as the file says, which is why the contract test exists.
+cannot express. Current: `cargo test` regenerates the OpenAPI document and
+fails when the committed file differs from it as a parsed structure, and runs
+a contract test that starts the server in-process and sends every row of the
+endpoint table implemented so far, each error status included, validating
+status, headers and body against the generated document. Target, P1: CI also
+regenerates the frontend types and type-checks the frontend. The regeneration
+check alone cannot show that a handler answers as the file says, which is why
+the contract test exists.
 
 ## Identity model
 
@@ -323,9 +325,10 @@ identity's gives one 400, so it reveals nothing about the id.
 
 Current: the `revisions` table exists (migration 8). Every create writes
 version 1 in the same transaction as the paste, and the migration wrote version 1
-for every older paste, so the `version_id` and `ETag` of a create response will
-be real from the first day. Target, P1: the `/v1` responses carry them. Target,
-P2: edits.
+for every older paste, so the `version_id` and `ETag` of a create response are
+real from the first day. Current: `POST /v1/pastes`, `GET /v1/pastes/{id}` and
+`GET /v1/pastes/{id}/content` carry them, read from the head revision without
+consuming the paste. Target, P2: edits.
 
 A version id is a hash chain, as in git:
 

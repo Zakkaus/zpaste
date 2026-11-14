@@ -85,6 +85,10 @@ impl Client {
         self.client.post(format!("http://{}/", self.addr))
     }
 
+    pub(crate) fn put(&self, url: &str) -> RequestBuilder {
+        self.client.put(format!("http://{}{}", self.addr, url))
+    }
+
     pub(crate) fn delete(&self, url: &str) -> RequestBuilder {
         self.client.delete(format!("http://{}{}", self.addr, url))
     }
