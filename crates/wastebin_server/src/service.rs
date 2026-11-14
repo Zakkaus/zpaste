@@ -79,6 +79,23 @@ pub(crate) async fn create(
     Ok((state.db.create(entry).await?, uid))
 }
 
+/// The head of `id` and, for an ordinary paste, its current text. An encrypted or
+/// burn-after-reading paste gives no text: its stored bytes are not even read, and nothing is
+/// derived or consumed.
+pub(crate) async fn peek(state: &AppState, id: Id) -> Result<(Head, Option<String>), Failure> {
+    // The flags come first, so a sealed paste's bytes are never copied.
+    let head = state.db.head(id).await?;
+    if head.encrypted || head.burn_after_reading {
+        return Ok((head, None));
+    }
+
+    // Both flags are fixed at creation, so they still hold for this second read; its head
+    // carries the version the text belongs to.
+    let (head, data) = state.db.head_with_data(id).await?;
+    let text = db::read::decompress(data).await?;
+    Ok((head, Some(text)))
+}
+
 /// Read the current content of `id`.
 ///
 /// An encrypted paste needs `password`; checking it derives a key, which counts against

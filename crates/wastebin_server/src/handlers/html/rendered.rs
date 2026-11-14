@@ -285,13 +285,14 @@ mod tests {
             .to_owned();
         assert!(csp.contains("img-src * data:"), "csp: {csp}");
 
+        // The reading page sends its own policy (invariant 17).
         let source = client.get(&location).send().await?;
         let csp = source
             .headers()
             .get("content-security-policy")
             .unwrap()
             .to_str()?;
-        assert!(csp.contains("img-src 'self' data:"), "csp: {csp}");
+        assert!(csp.contains("img-src 'self' https: data:"), "csp: {csp}");
 
         Ok(())
     }

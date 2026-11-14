@@ -10,6 +10,7 @@ mod service;
 #[cfg(test)]
 mod test_helpers;
 mod v1;
+mod web;
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -94,7 +95,7 @@ impl FromRef<AppState> for Cache {
     }
 }
 
-async fn security_headers_layer(req: Request, next: Next) -> impl IntoResponse {
+async fn security_headers_layer(req: Request, next: Next) -> Response {
     // Rendered Markdown may embed remote images via `![](…)`; relax img-src for that route only.
     const CSP_STRICT: HeaderValue = HeaderValue::from_static(
         "default-src 'none'; script-src 'self'; img-src 'self' data: ; style-src 'self' data: ; font-src 'self' data: ; object-src 'none' ; base-uri 'none' ; frame-ancestors 'none' ; form-action 'self' ;",
@@ -109,9 +110,8 @@ async fn security_headers_layer(req: Request, next: Next) -> impl IntoResponse {
         CSP_STRICT
     };
 
-    let headers: [(HeaderName, HeaderValue); 7] = [
+    let headers: [(HeaderName, HeaderValue); 6] = [
         (SERVER, HeaderValue::from_static(env!("CARGO_PKG_NAME"))),
-        (CONTENT_SECURITY_POLICY, csp),
         (REFERRER_POLICY, HeaderValue::from_static("same-origin")),
         (X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")),
         (X_FRAME_OPTIONS, HeaderValue::from_static("SAMEORIGIN")),
@@ -122,7 +122,13 @@ async fn security_headers_layer(req: Request, next: Next) -> impl IntoResponse {
         (X_XSS_PROTECTION, HeaderValue::from_static("1; mode=block")),
     ];
 
-    (headers, next.run(req).await)
+    let mut response = (headers, next.run(req).await).into_response();
+    // A reading page brings its own policy (`web::Web::csp`).
+    response
+        .headers_mut()
+        .entry(CONTENT_SECURITY_POLICY)
+        .or_insert(csp);
+    response
 }
 
 async fn handle_service_errors(
@@ -221,7 +227,11 @@ fn make_app(state: AppState, timeout: Duration, max_body_size: usize) -> Router 
 
     let mut app = Router::new();
 
-    for asset in assets {
+    for asset in assets
+        .into_iter()
+        .chain(&web::WEB.files)
+        .chain([&web::WEB.noscript_css])
+    {
         app = app.route(asset.route(), asset_route(asset));
     }
 
@@ -239,7 +249,7 @@ fn make_app(state: AppState, timeout: Duration, max_body_size: usize) -> Router 
         .route(
             "/{id}",
             get(html::paste::get)
-                .post(html::paste::get)
+                .post(html::paste::post)
                 .delete(delete::api::delete),
         )
         .route("/dl/{id}", get(download::get))
@@ -285,6 +295,9 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
     let (db, db_handler) = Database::new(method)?;
     let db = db.with_kdf_limit(kdf_limit);
 
+    if !web::BUILT {
+        tracing::warn!("built without web/dist: every reading page is a placeholder");
+    }
     tracing::debug!("serving on {socket_type}");
     tracing::debug!("caching {cache_size} paste highlights");
     tracing::debug!("restricting maximum body size to {max_body_size} bytes");

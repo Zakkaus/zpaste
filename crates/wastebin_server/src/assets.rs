@@ -67,6 +67,9 @@ pub(crate) struct Asset {
     brotli: Option<Bytes>,
     /// Gzip encoded content, `None` if that is not smaller than [`Self::identity`].
     gzip: Option<Bytes>,
+    /// Whether the route names this content only, so a cache may keep it for [`MAX_AGE`];
+    /// otherwise a cache must revalidate it.
+    immutable: bool,
 }
 
 /// Asset kind.
@@ -111,8 +114,19 @@ impl Asset {
                 .expect("at least 16 characters")
         );
 
-        let identity = Bytes::from(content);
-        let (brotli, gzip) = if kind.compressible() {
+        Self::at(route, mime, Bytes::from(content), kind.compressible(), true)
+    }
+
+    /// Asset served at `route` as it is. `immutable` says the route changes with the content, as
+    /// the web build's hashed file names do.
+    pub fn at(
+        route: String,
+        mime: mime::Mime,
+        identity: Bytes,
+        compressible: bool,
+        immutable: bool,
+    ) -> Self {
+        let (brotli, gzip) = if compressible {
             (
                 compress_brotli(&identity).filter(|c| c.len() < identity.len()),
                 compress_gzip(&identity).filter(|c| c.len() < identity.len()),
@@ -127,6 +141,7 @@ impl Asset {
             identity,
             brotli,
             gzip,
+            immutable,
         }
     }
 
@@ -151,13 +166,16 @@ impl Asset {
 
         let body = body.expect("only available codings are negotiated");
 
+        let cache_control = if self.immutable {
+            headers::CacheControl::new()
+                .with_max_age(MAX_AGE)
+                .with_immutable()
+        } else {
+            headers::CacheControl::new().with_no_cache()
+        };
         let mut response = (
             TypedHeader(headers::ContentType::from(self.mime.clone())),
-            TypedHeader(
-                headers::CacheControl::new()
-                    .with_max_age(MAX_AGE)
-                    .with_immutable(),
-            ),
+            TypedHeader(cache_control),
             body,
         )
             .into_response();

@@ -1,9 +1,9 @@
 use askama::Template;
 use askama_web::WebTemplate;
 use axum::extract::{Form, Path, Query, State};
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use axum_extra::extract::SignedCookieJar;
-use axum_extra::extract::cookie::Key as CookieKey;
 use serde::Deserialize;
 
 use crate::cache::{Key, Mode};
@@ -12,8 +12,11 @@ use crate::handlers::extract::{Theme, Uids, verify_owner_token};
 use crate::handlers::html::{BurnConfirmation, FormAction, PasswordInput, make_error_response};
 use crate::handlers::{NoStore, uid_cookie};
 use crate::i18n::Lang;
-use crate::service;
-use crate::{Cache, Database, Highlighter, Page};
+use crate::service::{self, Failure};
+use crate::v1::auth;
+use crate::web::WEB;
+use crate::web::shell::{self, Embedded, PasteMeta, Reading};
+use crate::{AppState, Cache, Database, Highlighter, Page};
 use wastebin_core::crypto::Password;
 use wastebin_core::db;
 use wastebin_core::db::read::{Data, Entry, Metadata};
@@ -26,6 +29,120 @@ use wastebin_core::expiration::Expiration;
 #[derive(Deserialize, Debug)]
 pub(crate) struct OwnerHandoff {
     pub(crate) owner: Option<String>,
+}
+
+/// The reading page `/<id>[.<ext>]`: the web app's HTML shell (docs/architecture.md, "Serving a
+/// page"). It never consumes a paste and never derives a key; an encrypted or burn-after-reading
+/// paste's page carries nothing of it.
+pub async fn get(
+    State(state): State<AppState>,
+    Path(path): Path<String>,
+    Query(handoff): Query<OwnerHandoff>,
+    jar: SignedCookieJar,
+    uids: Option<Uids>,
+    headers: HeaderMap,
+) -> Response {
+    let key = path.parse::<Key>().ok();
+
+    // Invariant 16: the token leaves the URL before any HTML is produced.
+    if let Some(token) = handoff.owner.as_deref() {
+        let location = key
+            .as_ref()
+            .map_or_else(|| String::from("/"), |key| format!("/{key}"));
+        let redirect = found(&location).no_store();
+        return match (key, verify_owner_token(&state.key, token)) {
+            (Some(_), Some(claimed_uid)) => {
+                let mut new_uids = uids.map(|Uids(list)| list).unwrap_or_default();
+                if !new_uids.contains(&claimed_uid) {
+                    new_uids.push(claimed_uid);
+                }
+                (jar.add(uid_cookie(&new_uids)), redirect).into_response()
+            }
+            _ => redirect,
+        };
+    }
+
+    let Some(key) = key else {
+        return reading_page(&state, StatusCode::NOT_FOUND, &Reading::Missing, &path);
+    };
+    let (head, text) = match service::peek(&state, key.id).await {
+        Ok(read) => read,
+        Err(Failure::NotFound) => {
+            return reading_page(&state, StatusCode::NOT_FOUND, &Reading::Missing, &path);
+        }
+        Err(err) => {
+            tracing::error!(%err, "reading page");
+            return reading_page(
+                &state,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &Reading::Missing,
+                &path,
+            );
+        }
+    };
+    let Some(text) = text else {
+        return reading_page(&state, StatusCode::OK, &Reading::Sealed, &path);
+    };
+
+    // The owner's credentials only show the Edit action; every write is checked on its own. A
+    // Bearer token that fails, like no credentials, shows the page without it.
+    let can_edit = auth::caller(&headers, &state.key, &state.page.base_url, false)
+        .is_ok_and(|caller| head.uid.is_some_and(|uid| caller.uids().contains(&uid)));
+    let embedded = Embedded {
+        paste: PasteMeta::new(&head),
+        content: &text,
+        etag: format!("\"{}\"", head.version_id),
+        url_extension: key.ext.as_deref().filter(|ext| !ext.is_empty()),
+        can_edit,
+    };
+    reading_page(&state, StatusCode::OK, &Reading::Plain(embedded), &path)
+}
+
+/// 302 to `location`, which the caller built from a parsed [`Key`] and so is a valid header.
+fn found(location: &str) -> Response {
+    let location = HeaderValue::try_from(location).unwrap_or(HeaderValue::from_static("/"));
+    (StatusCode::FOUND, [(header::LOCATION, location)]).into_response()
+}
+
+/// The shell for `reading` at `/<path>`. Its policy admits the web app's run-time styles and the
+/// images a paste links (invariant 17). The page can depend on the reader's cookie (`can_edit`),
+/// so no shared cache keeps it and the reader's own revalidates it.
+fn reading_page(
+    state: &AppState,
+    status: StatusCode,
+    reading: &Reading<'_>,
+    path: &str,
+) -> Response {
+    let web = &*WEB;
+    let url = format!(
+        "{}/{}",
+        state.page.base_url.as_str().trim_end_matches('/'),
+        path
+    );
+    let html = shell::render(
+        &web.template,
+        reading,
+        &state.page.title,
+        &url,
+        web.noscript_css.route(),
+    );
+
+    (
+        status,
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/html; charset=utf-8"),
+            ),
+            (header::CONTENT_SECURITY_POLICY, web.csp.clone()),
+            (
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("private, no-cache"),
+            ),
+        ],
+        html,
+    )
+        .into_response()
 }
 
 #[derive(Deserialize, Debug)]
@@ -60,37 +177,22 @@ pub(crate) fn is_markdown_ext(ext: Option<&str>) -> bool {
     ext.is_some_and(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
 }
 
+/// `POST /<id>`: upstream's password and burn-confirmation forms, which post back to the paste
+/// (docs/architecture.md, "Legacy routes", open item A5).
 #[expect(clippy::too_many_arguments)]
-pub async fn get<E>(
+pub async fn post<E>(
     State(cache): State<Cache>,
     State(page): State<Page>,
     State(db): State<Database>,
     State(rate): State<RateLimit>,
     client: ClientKey,
     State(highlighter): State<Highlighter>,
-    State(cookie_key): State<CookieKey>,
     Path(id): Path<String>,
-    Query(handoff): Query<OwnerHandoff>,
-    jar: SignedCookieJar,
     uids: Option<Uids>,
     theme: Option<Theme>,
     lang: Lang,
     form: Result<Form<PasteForm>, E>,
 ) -> Response {
-    if let Some(token) = handoff.owner.as_deref()
-        && let Some(claimed_uid) = verify_owner_token(&cookie_key, token)
-    {
-        let mut new_uids = uids
-            .as_ref()
-            .map(|Uids(list)| list.clone())
-            .unwrap_or_default();
-        if !new_uids.contains(&claimed_uid) {
-            new_uids.push(claimed_uid);
-        }
-        let cookie = uid_cookie(&new_uids);
-        return (jar.add(cookie), Redirect::to(&format!("/{id}"))).into_response();
-    }
-
     async {
         let form = form.ok().map(|Form(form)| form);
         let password = form
@@ -225,7 +327,7 @@ mod tests {
         assert!(location.ends_with(".rs"), "location: {location}");
 
         // The prompt submits back to the very same paste, extension included.
-        let body = client.get(&location).send().await?.text().await?;
+        let body = client.post(&location).send().await?.text().await?;
         assert!(
             body.contains(&format!("action=\"{location}\"")),
             "body: {body}"
@@ -249,7 +351,7 @@ mod tests {
         let location = res.headers().get("location").unwrap().to_str()?.to_owned();
 
         // The password prompt is not cacheable.
-        let res = client.get(&location).send().await?;
+        let res = client.post(&location).send().await?;
         assert_eq!(res.status(), StatusCode::OK);
         assert_eq!(
             res.headers().get(reqwest::header::CACHE_CONTROL).unwrap(),

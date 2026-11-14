@@ -7,7 +7,6 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
 use wastebin_core::crypto::Password;
-use wastebin_core::db::read;
 
 use crate::AppState;
 use crate::client::ClientKey;
@@ -45,30 +44,22 @@ pub(crate) async fn get_content(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Response, ApiError> {
-    let id = paste_id(&id)?;
-    // The flags come first, so a 409 never copies the stored bytes.
-    let head = state.db.head(id).await?;
-
-    if head.encrypted {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            ErrorType::PasswordRequired,
-            "the paste is encrypted; read it with POST /v1/pastes/{id}/content and its password",
-        ));
-    }
-
-    if head.burn_after_reading {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            ErrorType::ConfirmationRequired,
-            "confirm to read; the paste is deleted after reading",
-        ));
-    }
-
-    // Both flags are fixed at creation, so they still hold for this second read; its head
-    // carries the version the content belongs to.
-    let (head, data) = state.db.head_with_data(id).await?;
-    let text = read::decompress(data).await?;
+    let (head, text) = service::peek(&state, paste_id(&id)?).await?;
+    let Some(text) = text else {
+        return Err(if head.encrypted {
+            ApiError::new(
+                StatusCode::CONFLICT,
+                ErrorType::PasswordRequired,
+                "the paste is encrypted; read it with POST /v1/pastes/{id}/content and its password",
+            )
+        } else {
+            ApiError::new(
+                StatusCode::CONFLICT,
+                ErrorType::ConfirmationRequired,
+                "confirm to read; the paste is deleted after reading",
+            )
+        });
+    };
     let content_type = HeaderValue::from_static("text/plain; charset=utf-8");
 
     Ok((
