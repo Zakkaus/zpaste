@@ -111,8 +111,7 @@ without mermaid never downloads mermaid.
 
 Astryx 0.7.0's built-in tokenizer covers JavaScript and TypeScript, JSON,
 HTML, XML and SVG, CSS, SCSS and Less, Python, shell, PHP and Hack, YAML
-and Markdown. Rust, Go, C and C++,
-diff, INI and TOML need a tokenizer adapter loaded per language. Which tokenizer
+and Markdown. Rust, Go, C and C++, diff, INI and TOML need a tokenizer adapter loaded per language. Which tokenizer
 backs that adapter is open.
 
 A component Astryx lacks is reported with `astryx gap-report`. Component source

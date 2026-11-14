@@ -326,7 +326,7 @@ P0 準備
  ├─ 線上設定已盤點（第八節）；.env 為 root 600，上線時以 sudo 讀取
  │    ├─ WASTEBIN_SIGNING_KEY 與 WASTEBIN_PASSWORD_SALT 必須沿用（沒設 salt 時上游預設是 "somesalt"，也要照舊）；
  │    │  否則所有 owner token 失效、加密內容解不開
- │    └─ 線上是 3.9.0（最新 tag），上游 master 已到 c0ec968：先確認 3.9.0 到 master 之間的 migration 與 owner token 格式，
+ │    └─ 線上已是上游 master c0ec968（3.9.0 到 master 沒有 migration 變動，owner token 格式相同）；
  │       Zpaste 以上游 master 為基礎，上線前在線上資料庫副本驗證
  ├─ 部署：沿用 matrix 上的 docker compose，只把 image 換成自建映像
  │    ├─ GitHub Actions（Zakkaus/zpaste）分三階段建置：Node 建前端 ▶ Rust 建 musl 靜態執行檔並嵌入前端 ▶ 最小映像（distroless 或 scratch），uid 10001 與現在相同
@@ -404,6 +404,6 @@ P3 gzpaste 子命令（改用 Rust 重寫，放在 Zpaste repo，共用 OpenAPI 
 | # | 問題 | 建議 |
 |---|---|---|
 | 1 | repo 與名稱 | **已決定（2026-11-14）**：個人帳號，名稱 Zpaste，非 fork 的獨立 repo，保留上游歷史並註明出處 |
-| 2 | 線上 wastebin 的部署 | **已盤點（2026-11-14）**：伺服器 `matrix`（社群 VPS，同機也執行 Matrix 的 Synapse）上的 `/opt/wastebin`，docker compose，映像 `quxfoo/wastebin:3.9.0`，uid 10001，SQLite 在 `./data/state.db`；`WASTEBIN_MAX_BODY_SIZE` 64 MiB；到期選項 `1h,1d,7d=d,1M`（預設 7 天）；`WASTEBIN_SIGNING_KEY` 與 `WASTEBIN_PASSWORD_SALT` 都有設定；前面是 Traefik（網路 `traefik`，限速平均 8、突發 40，壓縮），外層是 Cloudflare |
+| 2 | 線上 wastebin 的部署 | **已盤點（2026-11-14）**：伺服器 `matrix`（社群 VPS，同機也執行 Matrix 的 Synapse）上的 `/opt/wastebin`，docker compose，映像原為 `quxfoo/wastebin:3.9.0`，2026-11-14 已換成上游 master 自建映像 `wastebin-local:c0ec968`（補上兩個安全修補，只存在 matrix 本機；備份 `docker-compose.yml.bak-3.9.0`、`data/state.db.bak-3.9.0-20261114`），uid 10001，SQLite 在 `./data/state.db`；`WASTEBIN_MAX_BODY_SIZE` 64 MiB；到期選項 `1h,1d,7d=d,1M`（預設 7 天）；`WASTEBIN_SIGNING_KEY` 與 `WASTEBIN_PASSWORD_SALT` 都有設定；前面是 Traefik（網路 `traefik`，限速平均 8、突發 40，壓縮），外層是 Cloudflare |
 | 3 | 共用主題套件放哪 | **已決定：獨立 repo**（`gentoo-zh/gentoozh-astryx-theme`）。兩個使用者在不同帳號下，各自用 git tag 鎖版本；網站 repo 不用多管發佈流程 |
 | 4 | 驗證標頭 | **已決定：只用 `Authorization: Bearer`** |

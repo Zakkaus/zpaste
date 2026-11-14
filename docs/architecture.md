@@ -33,7 +33,7 @@ what fails when it is broken, so a change can be judged against it.
 | 3 | A burn-after-reading paste is consumed only by `POST /v1/pastes/{id}/content` with `confirm_burn`. No `GET` consumes content. | A link preview, a crawler or a page reload burns the paste before the reader sees it. | Target, P1 |
 | 4 | The HTML shell of an encrypted or burn-after-reading paste carries no content, no title and no summary. | The content or its title reaches link previews, caches and anyone with the URL. | Target, P1 |
 | 5 | Content embedded in the HTML shell is JSON with `<`, `>`, `&`, U+2028 and U+2029 escaped; Open Graph attributes and `<noscript>` text use HTML escaping; the Content Security Policy allows no inline script. | A paste containing `</script>` ends the data block early and runs as script on the paste's origin. | Target, P1 |
-| 6 | A version id is a SHA-256 over the parent id and the stored bytes, which are the ciphertext for an encrypted paste. | Someone without the password confirms a guessed plaintext by hashing it, or an `ETag` matches content it does not describe. | Target, P1 |
+| 6 | A version id is a SHA-256 over the parent id, the stored bytes (the ciphertext for an encrypted paste) and the title (presence flag, length and bytes). | Someone without the password confirms a guessed plaintext by hashing it, or an `ETag` matches content it does not describe. | Target, P1 |
 | 7 | Editing an encrypted paste first decrypts the current content with the supplied password; a failure returns 401 and writes nothing. | A mistyped password silently becomes the paste's new password. | Target, P2 |
 | 8 | A write authenticated by cookie must carry an `Origin` equal to the configured public URL (scheme, host and port); forwarded headers are not trusted. Bearer requests skip this check. | Another site makes the reader's browser edit or delete their pastes (CSRF). | Target, P1 |
 | 9 | A Bearer token that fails verification returns 401. The server never mints a new identity in its place. | A client's pastes split across identities without notice, and "my pastes" loses some of them. | Target, P1 |
@@ -43,7 +43,7 @@ what fails when it is broken, so a change can be judged against it.
 | 13 | The OpenAPI file is generated from the Rust handlers, and the frontend types are generated from that file; neither is edited by hand. | Server and client drift apart while both still compile. | Target, P0 draft, P1 checks |
 | 14 | A failed migration stops the server before it serves traffic. | The server accepts requests against a half-migrated schema and writes bad rows. | Current (upstream migrates at start-up) |
 | 15 | Logs never contain `Authorization`, `X-Paste-Password`, the `owner` query parameter or the body of a create response. | An owner token or a password is readable by anyone with log access. | Target, P1 |
-| 16 | `?owner=` is exchanged before any HTML is produced: the server stores the token in a cookie and answers 302 to the same URL without the token, with `no-store`. | The token stays in browser history, `Referer` headers and caches. | Target, P1 |
+| 16 | `?owner=` is exchanged before any HTML is produced: the server stores the token in a cookie and answers 302 to the same URL without the token, with `no-store`. | The token stays in browser history, `Referer` headers and caches. | Current (cookie and 302, `paste.rs`); Target, P1 (`no-store`) |
 
 ## System context
 
@@ -182,8 +182,7 @@ flowchart LR
 | Registry | `ghcr.io/zakkaus/zpaste:<version>`. Compose pins the digest, not the tag, so a rollback is a digest swap. | The version scheme is open. |
 | Configuration | `/etc/zpaste/env`, root 600, values moved from the current setup unchanged (invariant 2). Variables keep the `WASTEBIN_` prefix. | |
 | Data | `/var/lib/zpaste/state.db`, owned by uid 10001. Backups cover `/var/lib/zpaste`. | The backup schedule is open. |
-| Network | Cloudflare is the only way in; the host firewall accepts origin traffic from Cloudflare ranges only. Firewall changes edit the table and never run `nft flush ruleset`, which would also clear Docker's NAT rules. | |
-| Development | Desktop development and tests use rootless Docker only. | |
+| Network | Target: Cloudflare is the only way in; the host firewall accepts origin traffic from Cloudflare ranges only. Host rules (firewall edits, rootless Docker) are in [workflow.md](workflow.md#deployment-and-rollback). | |
 
 ## Serving a page: HTML shell, embedded JSON, browser app
 
@@ -197,7 +196,8 @@ static files:
    app does not fetch it a second time.
 3. A `<noscript>` block with the plain text, so a reader without JavaScript can
    still read an ordinary paste.
-4. The `?owner=` exchange (invariant 16), done before any HTML.
+4. The `?owner=` exchange (invariant 16), done before any HTML. Upstream
+   already does it; `no-store` is the P1 addition.
 
 Encrypted and burn-after-reading pastes get a shell with a generic title and no
 content (invariant 4). They cannot be read without JavaScript. Pastes are served
@@ -232,8 +232,8 @@ flowchart TD
 
 The reading URL is `/<id>[.<ext>]`. The renderer comes from the URL's extension
 when it has one, otherwise from the extension stored at creation, otherwise
-plain text. Other app routes are `/<id>/edit`, `/<id>/history`, `/` (new paste)
-and `/w/<slug>` (workspace).
+plain text. Other app routes are `/<id>/edit`, `/<id>/history`, `/` (new paste),
+`/w/<slug>` (workspace) and `/w/<slug>/<name>` (one entry of it).
 
 The Content Security Policy keeps upstream's strict base and adds
 `connect-src 'self'`. The start-up script is an external file. The only
@@ -254,7 +254,8 @@ reference, and this section keeps only the rules behind it.
   marker paging with `next` links only. `GET /v1` reports
   `{"version": {"id": "v1", "status": "CURRENT"}}`.
 - **Errors.** Every endpoint, axum's own rejections included, returns one JSON
-  shape: `code`, `type`, `title`, `message`, `request_id`.
+  shape, wrapped as `{"error": {...}}`, with the fields `code`, `type`, `title`,
+  `message` and `request_id`.
 - **Request ids.** A client's `X-Request-Id` matching `[A-Za-z0-9-]{1,64}` is
   kept; otherwise the server makes one. Every response carries it.
 - **Caching.** Every `/v1` response is `no-store`.
@@ -307,7 +308,7 @@ Target, P1:
 - The web app keeps the same token in a same-site cookie, in upstream's cookie
   format, which holds several identities and creates with the first.
 - `?owner=` moves one's own identity to another machine or browser
-  (invariant 16).
+  (invariant 16). Current except `no-store`, which is P1 work.
 - Permission is per identity, not per paste. A shareable edit link is not
   offered.
 
@@ -413,6 +414,7 @@ Target, P1:
 | `/md/<id>.<ext>` | 302 to `/<id>.<ext>`. |
 | `/burn`, `/dl`, `/qr` | Kept. |
 | `GET /<id>[.<ext>]` | The HTML shell. |
+| `POST /{id}` | Open. Today it takes the password and burn confirmation from upstream's HTML form; the app uses `POST /v1/pastes/{id}/content` instead. |
 | `POST /new`, `POST /delete/{id}`, `/theme` | Open. They serve upstream's HTML forms, which are removed. |
 
 The upstream askama templates, CSS and JavaScript are removed when the shell
@@ -446,7 +448,7 @@ past a migration restores the backup; see [workflow.md](workflow.md).
   values are open and belong in `REQUIREMENTS.md`.
 - **Two rate-limit layers.** Traefik limits every request (average 8, burst 40).
   Zpaste limits only the derivation paths. Both stay.
-- **Origin exposure.** The origin accepts Cloudflare only, so the per-IP limit
+- **Origin exposure.** Target: the origin accepts Cloudflare only, so the per-IP limit
   cannot be skipped by connecting directly.
 - **Burn reads.** Clients never retry a burn read automatically. A 404 on a
   retry means "possibly already consumed", and gzpaste exits with code 7 on a
@@ -464,7 +466,7 @@ past a migration restores the backup; see [workflow.md](workflow.md).
 Deferred until needed (plan sections 三 and 四): ANSI colours and jump-to-error
 in logs; CSV and TSV tables; side-by-side diffs; splitting multi-file pastes;
 native multi-file pastes; edit tokens limited to one paste; administrator
-expiry extension; API microversions; branching history.
+expiry extension; API microversions.
 
 Not built at all (plan section 六): accounts, quota tiers, real-time
 collaboration, full-text search, WYSIWYG editing.
@@ -495,10 +497,10 @@ Points the plan does not decide. Each blocks the phase named.
 | A2 | Image version scheme for `ghcr.io/zakkaus/zpaste:<version>`. | P0 (CI) |
 | A3 | Values of the derivation concurrency limit and per-IP rate. | P1 |
 | A4 | Whether the shell answers HTTP 404 or 200 for a missing or expired id (the app shows the same screen either way). | P1 |
-| A5 | Fate of `POST /new`, `POST /delete/{id}` and `/theme` once the upstream forms are gone. | P1 |
+| A5 | Fate of `POST /{id}`, `POST /new`, `POST /delete/{id}` and `/theme` once the upstream forms are gone. | P1 |
 | A6 | Fate of `wastebin_highlight` and `wastebin_theme_showcase` once the server stops highlighting. | P1 |
 | A7 | The test domain on which the new frontend is accepted before the switch (plan section 七). | P1 |
-| A8 | Backup schedule for `/var/lib/zpaste`, and how long "stable" is before `/opt/wastebin` is deleted. | P1 release |
+| A8 | Backup schedule for `/var/lib/zpaste`. | P1 release |
 | A9 | Who tracks upstream security fixes (plan section 四 asks for one named person). | P1 |
 | A10 | The multiple of `WASTEBIN_MAX_BODY_SIZE` that caps one paste's history. | P2 |
 | A11 | Whether history may branch (left to Zephyr). | After P2 |

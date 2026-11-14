@@ -44,14 +44,53 @@ merges. The acceptance below is what a phase adds on top. Where a phase needs a
 command that does not exist yet, the branch that builds the check adds it to
 `REQUIREMENTS.md` in the same pull request.
 
-| Phase | Branches | Acceptance (plan section 六) |
-| --- | --- | --- |
-| P0 Preparation | `p0/rebrand`, `p0/rules-kit` (merged); `p0/ci`, `p0/docs`; the OpenAPI draft branch is not named yet | The renamed executable, before any feature change, behaves like upstream against a copy of the live database. The live configuration is inventoried, and the signing key and salt carry over. Astryx 0.7.0 provides the reader components (checked). The shared theme repository exists. These three documents and the `REQUIREMENTS.md` commands and numbers exist. The OpenAPI draft is reviewed. |
-| P1 `/v1` reading endpoints and reading page | `p1/<topic>` | Regenerating the contract shows no difference. A burn paste is not consumed before the confirm press. A wrong password returns 401 with the error JSON. A Telegram preview shows title and summary. With JavaScript off, plain text is readable. At 390 px every table is a table; 320 to 1280 px have no horizontal page scroll. Cold-load transfer, time to first readable text and scrolling a 1,600-line document are inside the `REQUIREMENTS.md` budgets. Anonymous `curl` `POST /` and `/raw` still work. Every endpoint row has a contract test. The owner approves the first reading screen before the rest is built. |
-| P1b mermaid and mind map | `p1b/<topic>` | At 390 px the mind map is a vertical collapsible tree that needs no zoom. A node jumps to its section. Neither library downloads when unused. The owner approves the side-by-side screen first. |
-| P2 Edits and versions | `p2/<topic>` | Every branch of the edit rules (plan section 四) has a test: 401, 403 including a cookie without `Origin`, 409, 412, resending identical content, concurrent transactions, the history cap, history gone after delete, 429. |
-| P2b Workspaces | `p2b/<topic>` | An agent pushes the same entry three times: one link, three versions. One `/w/<slug>` link shows everything. Encrypted pastes show no title in the list. Deleting a workspace keeps its pastes. The owner approves the first workspace screen. |
-| P3 gzpaste in Rust | `p3/<topic>` | An agent runs `put -w` three times: one link, three versions. Every exit code in plan section 五 has a test. Without a terminal, a 412 neither prompts nor overwrites. Old flags and new subcommands give the same test results. |
+| Phase | Branches |
+| --- | --- |
+| P0 Preparation | `p0/rebrand`, `p0/rules-kit` (merged); `p0/ci`, `p0/docs`; the OpenAPI draft branch is not named yet |
+| P1 `/v1` reading endpoints and reading page | `p1/<topic>` |
+| P1b mermaid and mind map | `p1b/<topic>` |
+| P2 Edits and versions | `p2/<topic>` |
+| P2b Workspaces | `p2b/<topic>` |
+| P3 gzpaste in Rust | `p3/<topic>` |
+
+Acceptance, from plan section 六:
+
+- P0 Preparation:
+  - The renamed executable, before any feature change, behaves like upstream against a copy of the live database.
+  - The live configuration is inventoried, and the signing key and salt carry over.
+  - The shared theme repository exists.
+  - These three documents and the `REQUIREMENTS.md` commands and numbers exist.
+  - The OpenAPI draft is reviewed.
+  - Astryx 0.7.0 provides the reader components. Checked on 2026-11-14 by installing 0.7.0 in a scratch directory: Markdown, Outline, CodeBlock, Table and TabList are present; the gaps (syntax colouring languages, sticky table header, drawer) are in [design-language.md](design-language.md).
+- P1 `/v1` reading endpoints and reading page:
+  - Regenerating the contract shows no difference.
+  - A burn paste is not consumed before the confirm press.
+  - A wrong password returns 401 with the error JSON.
+  - A Telegram preview shows title and summary.
+  - With JavaScript off, plain text is readable.
+  - At 390 px every table is a table; 320 to 1280 px have no horizontal page scroll.
+  - Cold-load transfer, time to first readable text and scrolling a 1,600-line document are inside the `REQUIREMENTS.md` budgets.
+  - Anonymous `curl` `POST /` and `/raw` still work.
+  - Every endpoint row has a contract test.
+  - The owner approves the first reading screen before the rest is built.
+- P1b mermaid and mind map:
+  - At 390 px the mind map is a vertical collapsible tree that needs no zoom.
+  - A node jumps to its section.
+  - Neither library downloads when unused.
+  - The owner approves the side-by-side screen first.
+- P2 Edits and versions:
+  - Every branch of the edit rules (plan section 四) has a test: 401, 403 including a cookie without `Origin`, 409, 412, resending identical content, concurrent transactions, the history cap, history gone after delete, 429.
+- P2b Workspaces:
+  - An agent pushes the same entry three times: one link, three versions.
+  - One `/w/<slug>` link shows everything.
+  - Encrypted pastes show no title in the list.
+  - Deleting a workspace keeps its pastes.
+  - The owner approves the first workspace screen.
+- P3 gzpaste in Rust:
+  - An agent runs `put -w` three times: one link, three versions.
+  - Every exit code in plan section 五 has a test.
+  - Without a terminal, a 412 neither prompts nor overwrites.
+  - Old flags and new subcommands give the same test results.
 
 The P0 acceptance command for "behaves like upstream against a copy of the live
 database" is open.
@@ -60,9 +99,9 @@ database" is open.
 
 | What | Reviewer | Notes |
 | --- | --- | --- |
-| Plans and API design (the OpenAPI draft, the edit rules, the workspace model) | GPT-6 astra | Before coding starts. |
-| Pull request diffs | DeepSeek-flash, run through omp | A model family different from the writer's, which `AGENTS.md`, "Model usage", requires for High-risk changes. Follows `REVIEW.md`. |
-| English prose in documents and pull requests | DeepSeek-flash, run through omp | Against `AGENTS.md`, "Writing". |
+| Plans and API design (the OpenAPI draft, the edit rules, the workspace model) | GPT-6 astra | The owner's ruling of 2026-11-14. Before coding starts. |
+| Pull request diffs | DeepSeek-flash, run through omp | The owner's ruling of 2026-11-14. Follows `REVIEW.md`. For a High-risk change the reviewer must also be a different model family from the writer (`AGENTS.md`, "Model usage"); when the writer is DeepSeek, the orchestrator picks another family. |
+| English prose in documents and pull requests | DeepSeek-flash, run through omp | The same ruling. Against `AGENTS.md`, "Writing". |
 | Screens | The owner | A visible UI change waits for screenshots or a preview (`AGENTS.md`, "Merging"). |
 | Merge | The owner | Agents push branches and open pull requests; they never merge or push to `main`. |
 
@@ -140,5 +179,5 @@ No check yet confirms that the files these documents name exist or that the
 | W1 | Confirm the `p<phase>/<topic>` branch pattern for P1 and later; the plan says each phase works on its own branch, and P0 used one branch per task. | P1 |
 | W2 | The command that proves P0's "behaves like upstream against a copy of the live database". | P0 |
 | W3 | Where the open-questions list and the deferred-options list from `AGENTS.md` live in this repository. | None; asked with the next batch |
-| W4 | How long Zpaste must run stable before `/opt/wastebin` is deleted. | P1 release |
+| W4 | How long Zpaste must run stable before `/opt/wastebin` is deleted. This is the only place the question is tracked. | P1 release |
 | W5 | A gate that checks these documents: named files exist, "Current" sections are true. | P1 |
