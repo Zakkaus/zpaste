@@ -280,7 +280,7 @@ cargo test -p wastebin -- --ignored write_openapi_document
 | `v1::contract::tests::document_matches_committed` | `openapi.yaml`, parsed, differs from the generated document; it lists the JSON pointers that differ. Key order and YAML style do not count. |
 | `v1::contract::tests::router_matches_document` | a routed `/v1` operation has no annotation, an annotated handler is not routed, a declaration in `contract::pending` is routed, or a routed operation's `x-phase` is not `P1` |
 | `v1::tests` | a built operation answers a status, header or body that its entry in the generated document does not allow; one test per operation and status |
-| `v1::contract::schema::tests` | the schema validator of the contract tests accepts a planted violation |
+| `v1::contract::schema::tests` | the validator of the contract tests accepts a planted violation (at the top level, in a `oneOf` branch, in an optional property, or of a `format`), or compiles a malformed schema |
 
 ### Pinned versions
 
@@ -296,6 +296,7 @@ Checked on 2026-11-15 in a scratch crate and a scratch TypeScript project
 | `openapi-fetch` | 0.17.0 | 2026-02-11 | Typed client |
 | `typescript` | 5.9.3 | 2025-09-30 | `openapi-typescript` 7.13.0 requires `^5.x` |
 | `@redocly/cli` | 2.72.1 | | Lint, already pinned |
+| `jsonschema` | 0.60.2 (`default-features = false`) | 2026-10-26 | Validates responses against the generated document in the tests: draft 2020-12, `format` asserted, unknown formats refused |
 
 In P0 a crate on `utoipa` 6.0.0 produced `x-phase`, closed schemas, `oneOf`
 from untagged enums and `security: [{}, ownerToken, ownerCookie]`;

@@ -1,21 +1,38 @@
-//! A JSON Schema validator for the subset of keywords the contract uses. A keyword outside the
-//! subset is an error, so a schema the validator does not understand never passes silently.
+//! Validation against the generated contract with the `jsonschema` crate: JSON Schema draft
+//! 2020-12, the dialect of OpenAPI 3.1, with `format` asserted and unknown formats refused. Every
+//! schema is checked against the draft's meta-schema when it is compiled, so a malformed keyword
+//! fails even in a `oneOf` branch or a property the instance leaves out.
 
-use serde_json::Value;
-
-/// Keywords that only annotate.
-const ANNOTATIONS: &[&str] = &[
-    "description",
-    "example",
-    "examples",
-    "default",
-    "format",
-    "title",
-];
+use serde_json::{Value, json};
 
 /// Validate `instance` against `schema`, resolving `$ref`s in `document`.
 pub(crate) fn validate(document: &Value, schema: &Value, instance: &Value) -> Result<(), String> {
-    check(document, schema, instance, "")
+    // The document is the root resource, so `#/components/...` resolves in it; the schema under
+    // test sits at `/x-subject`. The OpenAPI fields at the root are not JSON Schema keywords, so
+    // they assert nothing.
+    let mut root = document.clone();
+    root["x-subject"] = schema.clone();
+    root["$ref"] = json!("#/x-subject");
+
+    let validator = jsonschema::draft202012::options()
+        .should_validate_formats(true)
+        .should_ignore_unknown_formats(false)
+        // OpenAPI's integer formats; JSON Schema checks formats on strings only, so these
+        // never see a value.
+        .with_format("int32", |_| false)
+        .with_format("int64", |_| false)
+        .build(&root)
+        .map_err(|err| format!("invalid schema: {err}"))?;
+
+    let errors: Vec<String> = validator
+        .iter_errors(instance)
+        .map(|err| format!("{}: {err}", err.instance_path()))
+        .collect();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 /// The value at a local `$ref` such as `#/components/schemas/Paste`.
@@ -24,157 +41,6 @@ pub(crate) fn resolve<'d>(document: &'d Value, reference: &str) -> Result<&'d Va
         .strip_prefix('#')
         .and_then(|pointer| document.pointer(pointer))
         .ok_or_else(|| format!("unresolved $ref {reference}"))
-}
-
-fn check(document: &Value, schema: &Value, instance: &Value, at: &str) -> Result<(), String> {
-    let schema = schema
-        .as_object()
-        .ok_or_else(|| format!("{at}: schema is not an object"))?;
-
-    for (keyword, value) in schema {
-        match keyword.as_str() {
-            "$ref" => {
-                let target = resolve(document, value.as_str().unwrap_or_default())?;
-                check(document, target, instance, at)?;
-            }
-            "type" => {
-                let types: Vec<&str> = match value {
-                    Value::String(name) => vec![name.as_str()],
-                    Value::Array(names) => names.iter().filter_map(Value::as_str).collect(),
-                    _ => return Err(format!("{at}: malformed type")),
-                };
-                if !types.iter().any(|name| has_type(instance, name)) {
-                    return Err(format!("{at}: {instance} is not of type {types:?}"));
-                }
-            }
-            "enum" => {
-                if !value
-                    .as_array()
-                    .is_some_and(|values| values.contains(instance))
-                {
-                    return Err(format!("{at}: {instance} is not one of {value}"));
-                }
-            }
-            "oneOf" => {
-                let matches = value
-                    .as_array()
-                    .ok_or_else(|| format!("{at}: malformed oneOf"))?
-                    .iter()
-                    .filter(|option| check(document, option, instance, at).is_ok())
-                    .count();
-                if matches != 1 {
-                    return Err(format!("{at}: {matches} oneOf branches match {instance}"));
-                }
-            }
-            "required" => {
-                if let Some(object) = instance.as_object() {
-                    for name in value.as_array().into_iter().flatten() {
-                        let name = name.as_str().unwrap_or_default();
-                        if !object.contains_key(name) {
-                            return Err(format!("{at}: missing required {name}"));
-                        }
-                    }
-                }
-            }
-            "properties" => {
-                if let Some(object) = instance.as_object() {
-                    for (name, property) in value.as_object().into_iter().flatten() {
-                        if let Some(field) = object.get(name) {
-                            check(document, property, field, &format!("{at}/{name}"))?;
-                        }
-                    }
-                }
-            }
-            "additionalProperties" => {
-                if value != &Value::Bool(false) {
-                    return Err(format!(
-                        "{at}: only additionalProperties: false is supported"
-                    ));
-                }
-                if let Some(object) = instance.as_object() {
-                    let known = schema.get("properties").and_then(Value::as_object);
-                    if let Some(name) = object
-                        .keys()
-                        .find(|name| !known.is_some_and(|known| known.contains_key(*name)))
-                    {
-                        return Err(format!("{at}: field {name} is not in the schema"));
-                    }
-                }
-            }
-            "items" => {
-                for (index, item) in instance.as_array().into_iter().flatten().enumerate() {
-                    check(document, value, item, &format!("{at}/{index}"))?;
-                }
-            }
-            "minItems" | "maxItems" => {
-                if let Some(items) = instance.as_array() {
-                    bound(keyword, value, items.len(), at)?;
-                }
-            }
-            "minLength" | "maxLength" => {
-                if let Some(text) = instance.as_str() {
-                    bound(keyword, value, text.chars().count(), at)?;
-                }
-            }
-            "minimum" | "maximum" => {
-                if let (Some(limit), Some(number)) = (value.as_f64(), instance.as_f64()) {
-                    let fits = if keyword == "minimum" {
-                        number >= limit
-                    } else {
-                        number <= limit
-                    };
-                    if !fits {
-                        return Err(format!("{at}: {number} violates {keyword} {limit}"));
-                    }
-                }
-            }
-            "pattern" => {
-                if let Some(text) = instance.as_str() {
-                    let pattern = value.as_str().unwrap_or_default();
-                    let regex = fancy_regex::Regex::new(pattern)
-                        .map_err(|err| format!("{at}: bad pattern {pattern}: {err}"))?;
-                    if !regex.is_match(text).unwrap_or(false) {
-                        return Err(format!("{at}: {text:?} does not match {pattern}"));
-                    }
-                }
-            }
-            keyword if ANNOTATIONS.contains(&keyword) => {}
-            keyword => return Err(format!("{at}: unsupported keyword {keyword}")),
-        }
-    }
-
-    Ok(())
-}
-
-fn has_type(instance: &Value, name: &str) -> bool {
-    match name {
-        "null" => instance.is_null(),
-        "boolean" => instance.is_boolean(),
-        "string" => instance.is_string(),
-        "integer" => instance.is_i64() || instance.is_u64(),
-        "number" => instance.is_number(),
-        "array" => instance.is_array(),
-        "object" => instance.is_object(),
-        _ => false,
-    }
-}
-
-fn bound(keyword: &str, limit: &Value, actual: usize, at: &str) -> Result<(), String> {
-    let limit = limit
-        .as_u64()
-        .and_then(|limit| usize::try_from(limit).ok())
-        .ok_or_else(|| format!("{at}: malformed {keyword}"))?;
-    let fits = if keyword.starts_with("min") {
-        actual >= limit
-    } else {
-        actual <= limit
-    };
-
-    if fits {
-        Ok(())
-    } else {
-        Err(format!("{at}: {actual} violates {keyword} {limit}"))
-    }
 }
 
 #[cfg(test)]
@@ -242,9 +108,59 @@ mod tests {
         }
     }
 
+    /// A violation nested in a `oneOf` branch, in an optional property, or of a `format` fails.
     #[test]
-    fn rejects_unknown_keywords() {
-        let schema = json!({"type": "string", "contentEncoding": "base64"});
-        assert!(validate(&json!({}), &schema, &json!("x")).is_err());
+    fn rejects_nested_and_format_violations() {
+        let document = document();
+        let created = json!({"$ref": "#/components/schemas/PasteCreatedDocument"});
+
+        let mut encrypted = plain();
+        encrypted["encrypted"] = json!(true);
+        encrypted
+            .as_object_mut()
+            .map(|object| object.remove("title"));
+        assert_eq!(paste_document(encrypted.clone()), Ok(()));
+
+        let mut bad_branch = encrypted;
+        bad_branch["extension"] = json!(5);
+        let mut bad_token = plain();
+        bad_token["owner_token"] = json!("token");
+        assert_eq!(
+            validate(&document, &created, &json!({"paste": bad_token.clone()})),
+            Ok(())
+        );
+        bad_token["owner_token"] = json!(5);
+        let mut bad_date = plain();
+        bad_date["expires_at"] = json!("tomorrow");
+        let mut bad_uri = plain();
+        bad_uri["links"][0]["href"] = json!("no scheme");
+
+        for (name, paste) in [
+            ("oneOf branch", bad_branch),
+            ("date-time", bad_date),
+            ("uri", bad_uri),
+        ] {
+            assert!(paste_document(paste).is_err(), "{name} passed");
+        }
+        assert!(
+            validate(&document, &created, &json!({"paste": bad_token})).is_err(),
+            "optional property passed"
+        );
+    }
+
+    /// A malformed schema fails even where the instance never reaches it.
+    #[test]
+    fn rejects_malformed_schemas_anywhere() {
+        for schema in [
+            json!({"oneOf": [{"type": "string"}, {"type": "string", "maxLength": "ten"}]}),
+            json!({"type": "object", "properties": {"absent": {"type": "strin"}}}),
+            json!({"type": "string", "format": "date-tim"}),
+        ] {
+            assert!(
+                validate(&json!({}), &schema, &json!({})).is_err()
+                    && validate(&json!({}), &schema, &json!("x")).is_err(),
+                "{schema} passed"
+            );
+        }
     }
 }
