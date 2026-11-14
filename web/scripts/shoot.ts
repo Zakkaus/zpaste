@@ -36,6 +36,7 @@ import {EMBEDDED_PASTE_ID} from '../src/shell/embedded.ts';
 import {MARKDOWN_LIMIT, TEXT_LIMIT} from '../src/reader/renderPlan.ts';
 import {DEFAULT_FIXTURE, embeddedPaste, fixturePaste, withEmbeddedPaste} from './fixture.ts';
 import {longMarkdown} from './longFixture.ts';
+import {STYLE_SRC_FILE} from './style-hashes.ts';
 import {TYPE_ROLES, readTypeScale} from './typeScale.ts';
 
 const DIST = process.env.ZPASTE_DIST ?? new URL('../dist/', import.meta.url).pathname;
@@ -115,14 +116,14 @@ const CLS_MAX = 0.01;
 const STEADY_CONTROLS = `[role="banner"] :is(button, a), [role="group"][aria-label="${en['action.actions']}"] > *`;
 
 /**
- * The reading page's Content Security Policy (docs/architecture.md, invariant 17), served with every
- * page, with a report address so that every violation reaches this script. Styles also allow inline
- * `<style>` elements: Astryx inserts two at run time (CodeBlock's highlight colours and the layer slide
- * rules), which upstream's `style-src 'self' data:` blocks; how the shell admits them is open
- * (docs/architecture.md, "Open items", A13).
+ * The reading page's Content Security Policy (docs/architecture.md, invariant 17), as the server's shell
+ * sends it, with a report address so that every violation reaches this script. Styles admit the two
+ * `<style>` elements Astryx inserts at run time by their hashes, which `pnpm build` writes
+ * (scripts/style-hashes.ts); a hash that does not match the inserted text shows as a violation.
  */
 const CSP =
-  "default-src 'none'; script-src 'self'; img-src 'self' https: data:; style-src 'self' data: 'unsafe-inline'; font-src 'self' data:; " +
+  "default-src 'none'; script-src 'self'; img-src 'self' https: data:; " +
+  `style-src 'self' data: ${readFileSync(join(DIST, STYLE_SRC_FILE), 'utf8').trim().split('\n').join(' ')}; font-src 'self' data:; ` +
   "connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; report-uri /csp-report";
 /** What the policy blocked: the page's path and the blocked address. */
 const violations: {page: string; blocked: string}[] = [];
