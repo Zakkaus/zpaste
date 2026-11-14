@@ -16,8 +16,7 @@ use serde::Serialize;
 #[cfg(test)]
 use utoipa::{IntoParams, ToSchema};
 
-use wastebin_core::crypto::Password;
-use wastebin_core::db::{Head, read, write};
+use wastebin_core::db::{Head, write};
 use wastebin_core::expiration::Expiration;
 use wastebin_core::id::Id;
 
@@ -30,15 +29,14 @@ use crate::service;
 use crate::v1::auth::{self, Identity};
 #[cfg(test)]
 use crate::v1::contract::responses::{
-    BadRequest, Forbidden, NotFound, PayloadTooLarge, ReadPrecondition, TooManyRequests,
-    Unauthorized, WrongPassword,
+    BadRequest, Forbidden, NotFound, PayloadTooLarge, TooManyRequests, Unauthorized,
 };
-use crate::v1::error::{ApiError, ErrorType, V1Json};
+use crate::v1::error::{ApiError, V1Json};
 #[cfg(test)]
 use crate::v1::model::PasteId;
 use crate::v1::model::{
-    ContentDocument, ContentReadRequest, Paste, PasteCreate, PasteCreateRequest, PasteCreated,
-    PasteCreatedDocument, PasteDocument, PasteListDocument, VERSION_DOCUMENT, VersionDocument,
+    Paste, PasteCreate, PasteCreateRequest, PasteCreated, PasteCreatedDocument, PasteDocument,
+    PasteListDocument, VERSION_DOCUMENT, VersionDocument,
 };
 
 const MAX_TITLE_CHARS: usize = 256;
@@ -293,66 +291,6 @@ pub(crate) async fn delete(
     }
 }
 
-/// Read the content of a plain paste
-///
-/// Returns the raw text of a paste that is neither encrypted nor
-/// burn-after-reading. For an encrypted paste (burn or not) it answers 409
-/// `password_required`; for a burn-after-reading paste, 409
-/// `confirmation_required`. It consumes nothing.
-#[cfg_attr(test, utoipa::path(
-    get,
-    path = "/v1/pastes/{id}/content",
-    tag = "content",
-    operation_id = "getContent",
-    extensions(("x-phase" = json!("P1"))),
-    security(()),
-    responses(
-        (status = 200, description = "The current content, UTF-8.", body = String,
-            content_type = "text/plain; charset=utf-8"),
-        (status = 404, response = NotFound),
-        (status = 409, response = ReadPrecondition),
-    ),
-))]
-pub(crate) async fn get_content(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<Response, ApiError> {
-    let id = paste_id(&id)?;
-    // The flags come first, so a 409 never copies the stored bytes.
-    let head = state.db.head(id).await?;
-
-    if head.encrypted {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            ErrorType::PasswordRequired,
-            "the paste is encrypted; read it with POST /v1/pastes/{id}/content and its password",
-        ));
-    }
-
-    if head.burn_after_reading {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            ErrorType::ConfirmationRequired,
-            "confirm to read; the paste is deleted after reading",
-        ));
-    }
-
-    // Both flags are fixed at creation, so they still hold for this second read; its head
-    // carries the version the content belongs to.
-    let (head, data) = state.db.head_with_data(id).await?;
-    let text = read::decompress(data).await?;
-    let content_type = HeaderValue::from_static("text/plain; charset=utf-8");
-
-    Ok((
-        [
-            (header::CONTENT_TYPE, content_type),
-            (header::ETAG, etag(&head)),
-        ],
-        text,
-    )
-        .into_response())
-}
-
 // The documented values of `owner`; `ListParams` reads the query.
 #[cfg(test)]
 #[allow(dead_code, reason = "a schema of the generated contract")]
@@ -464,95 +402,13 @@ fn invalid_marker() -> ApiError {
     ApiError::bad_request("marker is not a paste of this list")
 }
 
-/// Read content with a password or a burn confirmation
-///
-/// No credentials are needed, but a request that carries the `uid` cookie
-/// without a matching `Origin` is 403 before the paste is looked up, because
-/// a burn read is a write.
-///
-/// The only way to consume a burn-after-reading paste: it is consumed once,
-/// atomically, when the request has `confirm_burn: true` (and, if encrypted,
-/// the right `password`), and is 404 afterwards. Of two concurrent confirmed
-/// requests, one gets the content and the other 404. A client that gets 404
-/// on a retry must treat the paste as possibly read and must not retry on its
-/// own.
-///
-/// | Paste | Body | Answer |
-/// | --- | --- | --- |
-/// | encrypted | no `password` | 409 `password_required` |
-/// | encrypted | wrong `password` | 401 `wrong_password` |
-/// | encrypted, not burn | right `password` | 200 |
-/// | burn, not encrypted | no `confirm_burn` | 409 `confirmation_required` |
-/// | burn, not encrypted | `confirm_burn: true` | 200, consumed |
-/// | encrypted and burn | right `password`, no `confirm_burn` | 409 `confirmation_required`; nothing returned or consumed |
-/// | encrypted and burn | right `password` and `confirm_burn: true` | 200, consumed |
-///
-/// Every request that carries `password` for an encrypted paste derives a
-/// key, the confirmation step included: it counts against the client's
-/// derivation rate and takes a slot of the shared derivation limit, and past
-/// either it is 429 with `Retry-After`. A plain paste derives nothing.
-#[cfg_attr(test, utoipa::path(
-    post,
-    path = "/v1/pastes/{id}/content",
-    tag = "content",
-    operation_id = "readContent",
-    extensions(("x-phase" = json!("P1"))),
-    security(()),
-    request_body(content = ContentReadRequest, examples(
-        ("password" = (value = json!({"password": "hunter2"}))),
-        ("burn" = (value = json!({"confirm_burn": true}))),
-        ("both" = (value = json!({"password": "hunter2", "confirm_burn": true}))),
-    )),
-    responses(
-        (status = 200, description = "The current content.", body = ContentDocument),
-        (status = 400, response = BadRequest),
-        (status = 401, response = WrongPassword),
-        (status = 403, response = Forbidden),
-        (status = 404, response = NotFound),
-        (status = 409, response = ReadPrecondition),
-        (status = 429, response = TooManyRequests),
-    ),
-))]
-pub(crate) async fn read_content(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    client: ClientKey,
-    headers: HeaderMap,
-    body: Result<V1Json<ContentReadRequest>, ApiError>,
-) -> Result<Response, ApiError> {
-    // `Origin` and the body are answered before the paste is looked up or a key derived.
-    auth::check_origin(&headers, &state.page.base_url)?;
-    let V1Json(request) = body?;
-    if request.password.as_ref().is_some_and(String::is_empty) {
-        return Err(ApiError::bad_request("password must be non-empty"));
-    }
-    let password = request
-        .password
-        .map(|password| Password::from(password.into_bytes()));
-
-    let content = service::read(
-        &state,
-        client,
-        paste_id(&id)?,
-        password,
-        request.confirm_burn.is_some(),
-    )
-    .await?;
-
-    Ok((
-        [(header::ETAG, etag(&content.head))],
-        Json(ContentDocument::new(&content.head, content.text)),
-    )
-        .into_response())
-}
-
 /// A path id that does not parse names no paste: 404, like a missing one.
-fn paste_id(id: &str) -> Result<Id, ApiError> {
+pub(super) fn paste_id(id: &str) -> Result<Id, ApiError> {
     id.parse().map_err(|_| ApiError::not_found())
 }
 
 /// Strong entity tag of the head version, `"<version_id>"`.
-fn etag(head: &Head) -> HeaderValue {
+pub(super) fn etag(head: &Head) -> HeaderValue {
     HeaderValue::try_from(format!("\"{}\"", head.version_id))
         .unwrap_or_else(|_| HeaderValue::from_static("\"\""))
 }

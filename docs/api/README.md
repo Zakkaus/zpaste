@@ -307,10 +307,10 @@ that document and of the draft with `tsc` 5.9.3 (`strict`,
 
 ### Where each part comes from
 
-- Operations: `#[utoipa::path]` on the handlers in `v1/pastes.rs` (and
-  `GET /` on `handlers/html/index.rs`), compiled only in tests
-  (`#[cfg_attr(test, utoipa::path(...))]`). Summary and description come from
-  the handler's doc comment.
+- Operations: `#[utoipa::path]` on the handlers in `v1/pastes.rs` and
+  `v1/content.rs` (and `GET /` on `handlers/html/index.rs`), compiled only in
+  tests (`#[cfg_attr(test, utoipa::path(...))]`). Summary and description
+  come from the handler's doc comment.
 - Schemas: `ToSchema` on the request and response types in `v1/model.rs`.
   Each response shape is its own closed struct (`#[serde(deny_unknown_fields)]`
   gives `additionalProperties: false`), never the storage struct.
