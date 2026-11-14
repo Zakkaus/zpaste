@@ -1,85 +1,63 @@
 name: Release
 
+# On a v* tag: check the tag against the version in Cargo.toml, create a GitHub
+# release whose body is that version's section of CHANGELOG.md, and attach the
+# static x86_64 musl executables. The executables come from the Dockerfile's
+# amd64 target, so they are the ones the image runs. image.yml pushes the image
+# for the same tag.
 on:
   push:
-    tags: ["[0-9]+.[0-9]+.[0-9]+*"]
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Tag to build (must already exist)
-        required: true
+    tags: ["v*"]
 
 permissions:
   contents: write
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
   create-release:
-    name: create release
+    name: Create release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      # Fail fast if the tag and Cargo.toml version disagree.
+      # Full history: the branch check below needs main's commits to find the
+      # tagged one.
+      - name: Checkout repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
       - name: Verify tag matches Cargo.toml
-        run: |
-          tag="${{ github.event.inputs.tag || github.ref_name }}"
-          crate="$(cargo metadata --no-deps --format-version=1 \
-            | jq -r '.packages[] | select(.name=="wastebin") | .version')"
-          test "$tag" = "$crate" || { echo "tag $tag != Cargo.toml $crate"; exit 1; }
-      # Release body = the section of CHANGELOG.md matching the tag version.
-      - uses: taiki-e/create-gh-release-action@v1
+        run: scripts/check-version-tag.sh "$GITHUB_REF_NAME"
+
+      # Fails when CHANGELOG.md has no section for the version, or the tagged
+      # commit is not on main.
+      - uses: taiki-e/create-gh-release-action@045e5c0ed9c50cc1f96de7e891a09ad3daea245f # v1.12.0
         with:
           changelog: CHANGELOG.md
-          ref: refs/tags/${{ github.event.inputs.tag || github.ref_name }}
+          branch: main
           token: ${{ secrets.GITHUB_TOKEN }}
 
   upload-assets:
-    name: ${{ matrix.target }}
+    name: x86_64-unknown-linux-musl
     needs: create-release
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-apple-darwin
-            os: macos-latest
-          - target: aarch64-apple-darwin
-            os: macos-latest
-          - target: riscv64gc-unknown-linux-gnu
-            os: ubuntu-latest
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-          - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Build binary
-        uses: houseabsolute/actions-rust-cross@v0
-        with:
-          target: ${{ matrix.target }}
-          toolchain: 1.95.0
-          args: "--locked --release --bin wastebin --bin wastebin-ctl"
-          strip: true
+      - name: Build executables
+        run: scripts/export-executables.sh dist
 
       - name: Prepare assets
         id: prepare
-        shell: bash
         run: |
-          tag="${{ github.event.inputs.tag || github.ref_name }}"
-          mv target/${{ matrix.target }}/release/wastebin{,-ctl} .
-          archive="wastebin_${tag}_${{ matrix.target }}.tar.zst"
-          echo "archive=${archive}" >> "$GITHUB_OUTPUT"
-          tar --zstd -cf "$archive" LICENSE README.md wastebin wastebin-ctl
+          archive="zpaste_${GITHUB_REF_NAME}_x86_64-unknown-linux-musl.tar.zst"
+          cp LICENSE README.md dist/
+          tar --zstd -C dist -cf "$archive" LICENSE README.md zpaste wastebin-ctl
           sha256sum "$archive" > "$archive.sha256"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
 
-      - name: Upload to Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            ${{ steps.prepare.outputs.archive }}
-            ${{ steps.prepare.outputs.archive }}.sha256
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ARCHIVE: ${{ steps.prepare.outputs.archive }}
+        run: gh release upload "$GITHUB_REF_NAME" "$ARCHIVE" "$ARCHIVE.sha256"
