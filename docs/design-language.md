@@ -136,6 +136,65 @@ Proposed for the owner's approval with the P1 first screen; each value is a them
   marked current still follows the page and stays in the rail's view.
   In the phone drawer each entry is at least the theme's touch height (44 px).
 
+## Type scale
+
+Each role is an Astryx role or a token of the theme package, and none changes
+with width: the numbers below hold from 320 to 1280 px. `REQUIREMENTS.md`,
+"Type scale", records them, and `web/scripts/shoot.ts` fails when a role renders
+another size or line height. The gentoozh.org column was measured on its
+zh-TW doc pages (a post and the binary package setup page) on 2026-11-15.
+
+| Role | Token | Zpaste (px, size / line height) | gentoozh.org doc page |
+| --- | --- | --- | --- |
+| Top-bar name | `large`, semibold | 17 / 24 | the logo image |
+| Page title (`h1`) | `heading-2` | 20 / 28 | `display-1`, 42 / 52 (29 / 36 below 640 px) |
+| Paste `#` | `heading-1` | 24 / 32 | none: the title comes from front matter |
+| Paste `##` | `heading-2` | 20 / 28 | `display-3`, 29 / 36 |
+| Paste `###` | `heading-3` | 17 / 24 | `heading-3`, 17 / 24 |
+| Paste `####` | `heading-4` | 14 / 20 | `heading-4`; no page uses it |
+| Body | the theme's Markdown body, `--font-size-lg` / 1.6471 | 17 / 28 | 17 / 28 |
+| Details | `supporting` | 12 / 20 | `supporting`, for post dates (read from the source) |
+| Table cell | `label` | 14 / 20 | body, 17 / 28 |
+| Table header | `label`, medium | 14 / 20 | 14 / 23.06, semibold |
+| Outline label | `label`, semibold | 14 / 20 | not compared |
+| Outline entry | Astryx `Outline`, compact | 14 / 20 | 14 / 20 |
+| Button | Astryx `Button`, `md` | 14 / 20 | 14 / 20 |
+| Inline code | `code` size in the body's line height | 14 / 23.06 | 14 / 23.06 |
+| Code block | `code` | 14 / 20 | 14 / 20 |
+
+Three roles differ from the site on purpose. The page title steps down for the
+paste's own first heading (see the title row above). Table cells take the label
+role because tables are data (see Tables above). The paste's `##` is open (D10):
+a post on the site has its title above it in `display-1`, so the site sets its
+`##` in `display-3`; Zpaste keeps Astryx's level-to-role order, because a
+paste's own `#` is its title.
+
+### Chinese text
+
+Measured with `web/fixtures/chinese.md`, a synthetic paste with one Traditional
+(Taiwan) half and one Simplified (mainland) half.
+
+- **Font.** Figtree sets Latin; Chinese falls back through the theme's list,
+  which names PingFang, Noto Sans CJK and Microsoft YaHei and JhengHei, the same
+  list gentoozh.org uses on its English pages. Every weight in use is a real
+  face (Noto Sans CJK Regular, Medium for the table header, Bold for the
+  semibold headings); Chrome synthesizes no bold.
+- **Glyph forms.** The list names the Simplified faces first, so a Traditional
+  paste is drawn with mainland glyph forms and its `，` and `。` sit at the
+  bottom left rather than centred. gentoozh.org orders the faces by the page's
+  locale (`SiteShell`); Zpaste has no locale yet (D6), so this is open (D11).
+- **Line height.** The body's 1.6471 (28 px at 17 px) is the site's, below the
+  1.7 usually given for Chinese body text. A change belongs in the theme
+  package, for both (D12).
+- **Line length.** 44 Chinese characters per line at 1280 px (a 752 px column
+  at 17 px) and 20 at 390 px, the same as the site's doc column. The comfortable
+  range is about 30 to 40; narrowing the column is a change to the shared width
+  (D12).
+- **Line breaks.** No line starts with closing punctuation and no paragraph
+  overflows its column, at 390 and 1280 px.
+- **Code.** The code faces have no Chinese glyphs; a Chinese comment falls back
+  to the system's Chinese sans, as on the site.
+
 ## Renderers
 
 The reading page picks a renderer by type: the extension in the URL, else the
@@ -266,3 +325,6 @@ tables, side-by-side diffs, splitting multi-file pastes.
 | D7 | Recording Markdown tables on phones as an exception to `web/AGENTS.md`, "Phone width", in `REQUIREMENTS.md`, "Exceptions". | P1 |
 | D8 | Layout library for the mind map: markmap or `d3-flextree`. | P1b |
 | D9 | What the edit page offers after a 412: reload, show a diff, or overwrite. gzpaste's behaviour is decided (plan section 五); the page's is not. | P2 |
+| D10 | The paste's heading roles: Astryx's order (`##` in `heading-2`, 20 px) or the site's (`##` in `display-3`, 29 px, with `#` above it). See [Type scale](#type-scale). | P1 first screen |
+| D11 | Chinese glyph forms: order the Simplified and Traditional faces by the interface locale, as gentoozh.org does, or by the paste's own language. | D6 |
+| D12 | Chinese line height (1.7 or more) and line length (30 to 40 characters): both are shared with gentoozh.org, so a change goes to the theme package and the site's column width. | P1 first screen |

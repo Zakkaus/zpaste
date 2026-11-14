@@ -45,8 +45,8 @@ meanwhile.
 
 | Item | Limit | Baseline (date, host, load) | Enforced by |
 | --- | --- | --- | --- |
-| Type scale (role: size / line height) | | | design system |
-| Spacing scale (section, card, inside card, label to field) | | | design system |
+| Type scale (role: size / line height) | top-bar name: 17 / 24; page title: 20 / 28; paste #: 24 / 32; paste ##: 20 / 28; paste ###: 17 / 24; paste ####: 14 / 20; body: 17 / 28; details: 12 / 20; table cell: 14 / 20; table header: 14 / 20; outline label: 14 / 20; outline entry: 14 / 20; button: 14 / 20; inline code: 14 / 23.06; code block: 14 / 20 | the same values: computed font size and line height in px of the reading page, production build, Chrome 157, identical at 390 and 1280 px and in the synthetic, Chinese and real (`r8BaRKfkXfi`) pastes, 2026-11-15, desktop `gentoo` (32 threads), load 2.8 to 3.7. Each role is a theme token; the roles, the tokens and the comparison with gentoozh.org are in `docs/design-language.md`, "Type scale" | design system (`@gentoozh/astryx-theme` and Astryx roles); `node web/scripts/shoot.ts` reads this row and fails when a role renders another size or line height at 390 or 1280 px |
+| Spacing scale (section, card, inside card, label to field) | in px: page padding 24; title row to paste 24; title row to its rule 16; title to details 4; between actions 8; column to outline rail 32; rail label to outline 8; paste blocks, as Astryx `Markdown` spaces them: 12 between paragraphs and from a heading to its text, 8 from a heading to a code block, 16 before a table, a quote or a `####` heading, 24 before a `##` or `###` heading; table cell 6 block, 8 inline; cards and label-to-field: none on the reading page | the same values: computed gaps and padding of the reading page, production build, Chrome 157, identical at 390 and 1280 px, 2026-11-15, desktop `gentoo` (32 threads), load 2.8 to 3.7; each is a `SPACE` step of `@gentoozh/astryx-theme` or Astryx `Markdown` spacing | design system (`SPACE` steps of `@gentoozh/astryx-theme`); review |
 | Page frame width; readable column width | | | e2e page-width check |
 | Supported widths (phone, laptop, wide) | | | screenshots |
 | Full end-to-end run, wall time | | | |
@@ -145,8 +145,6 @@ body.
 | --- | --- | --- | --- |
 | Commands: Pre-commit | no pre-commit hook exists; the fast read-only check would be `cargo fmt --all --check` | add a versioned hook that runs it and a script that installs it | 2026-12-14 |
 | Commands: Scheduled run on main | no scheduled workflow exists | add one for the heavy suites once any exist (full end-to-end in P1) | 2027-01-31 |
-| Numbers: Type scale (role: size / line height) | not measured; `web/` holds only the first reading screen, awaiting the owner's approval | P1 sets the scale in the design-language document and measures it in the first screen shown to the owner (plan v11, section 六, P1) | 2027-01-31 |
-| Numbers: Spacing scale (section, card, inside card, label to field) | not measured; `web/` holds only the first reading screen, awaiting the owner's approval | set with the type scale in P1 (plan v11, section 六, P1) | 2027-01-31 |
 | Numbers: Page frame width; readable column width | not measured; `web/` holds only the first reading screen, awaiting the owner's approval | set with the design language in P1; checked by the end-to-end page-width check (plan v11, section 六, P1) | 2027-01-31 |
 | Numbers: Supported widths (phone, laptop, wide) | not measured; `web/` holds only the first reading screen, awaiting the owner's approval | plan names 320 to 1280 px with no horizontal page scroll, 390 px for tables; confirm against the first screen (plan v11, sections 三 and 六) | 2027-01-31 |
 | Numbers: Full end-to-end run, wall time | not measured; `web/` holds only the first reading screen, awaiting the owner's approval | measure after the first end-to-end suite lands in P1 (plan v11, section 六, P1) | 2027-01-31 |

@@ -7,7 +7,9 @@
 // still follows the page and keeps the current entry in view, and measures scrolling through it. The
 // theme checks: the Copy button paints its final colour from the first frame, the light/dark switch
 // changes the theme, survives a reload without a frame of the other theme and follows the OS while no
-// choice is stored. From tablet width up a table of up to three columns fits its box.
+// choice is stored. From tablet width up a table of up to three columns fits its box. Every role of
+// the type scale renders the size and line height REQUIREMENTS.md records for it (typeScale.ts), at
+// 390 and 1280 px, in the paste and in the committed Chinese fixture, which has every role.
 //
 //   node scripts/shoot.ts <out-dir>        ZPASTE_FIXTURE=<file.md> picks the paste; CHROME=<path> the browser;
 //                                          ZPASTE_DIST=<dir> another build (default web/dist).
@@ -15,12 +17,13 @@
 // Exit 1 when a check fails, 2 when it cannot run.
 import {createServer, type Server} from 'node:http';
 import {mkdirSync, readFileSync} from 'node:fs';
-import {extname, join, normalize} from 'node:path';
+import {dirname, extname, join, normalize} from 'node:path';
 import {chromium, type Browser, type Page} from '@playwright/test';
 import {THEME_ATTRIBUTE, THEME_STORAGE_KEY} from '../src/chrome/themeMode.ts';
 import {en} from '../src/i18n/en.ts';
-import {embeddedPaste, fixturePaste, withEmbeddedPaste} from './fixture.ts';
+import {DEFAULT_FIXTURE, embeddedPaste, fixturePaste, withEmbeddedPaste} from './fixture.ts';
 import {longMarkdown} from './longFixture.ts';
+import {TYPE_ROLES, readTypeScale} from './typeScale.ts';
 
 const DIST = process.env.ZPASTE_DIST ?? new URL('../dist/', import.meta.url).pathname;
 const TYPES: Record<string, string> = {'.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.woff': 'font/woff'};
@@ -43,6 +46,16 @@ const FIT_WIDTHS = [768, 1010, 1280];
 const FIT_COLUMNS = 3;
 /** Where the generated long paste is served. */
 const LONG_PATH = '/long';
+/** Where the committed Chinese fixture is served: Traditional and Simplified prose, a table and commented code. */
+const CHINESE_PATH = '/zh';
+const CHINESE_FIXTURE = join(dirname(DEFAULT_FIXTURE), 'chinese.md');
+/** Shots of the Chinese fixture, also used for its type-scale check. */
+const TYPE_SHOTS = [
+  {width: 1280, height: 800, scheme: 'light'},
+  {width: 390, height: 844, scheme: 'dark'},
+] as const;
+/** Line heights are fractions of the size (1.6471 of 17 px is 28.0007 px); REQUIREMENTS.md rounds them. */
+const LEADING_TOLERANCE = 0.05;
 const OUTLINE = `nav[aria-label="${en['outline.label']}"]`;
 const COPY = `[role="group"][aria-label="${en['action.actions']}"] button`;
 
@@ -454,6 +467,52 @@ async function checkActions(page: Page, name: string, wide: boolean) {
   console.log(`${name}: ${boxes.length} actions ${[...heights].join('/')} px high in ${rows.size} row(s); Copy ${Math.round(before)} px as "Copy" and as "${after[1]}"`);
 }
 
+/**
+ * Each role of the type scale renders the size and line height REQUIREMENTS.md records, at 1280 px and
+ * 390 px. A role measures its first visible element; on a phone the outline is measured in the open
+ * drawer, and the rail's label does not show. `complete` (the Chinese fixture) requires every other
+ * role; another paste skips the roles it lacks. Shots of the page go to `out` when it is given.
+ */
+async function checkTypeScale(browser: Browser, url: string, name: string, complete: boolean, out?: string) {
+  const scale = readTypeScale();
+  for (const shot of TYPE_SHOTS) {
+    const label = `${name} ${shot.width}`;
+    const context = await browser.newContext({viewport: {width: shot.width, height: shot.height}, colorScheme: shot.scheme, deviceScaleFactor: 2});
+    const page = await context.newPage();
+    page.on('pageerror', error => failures.push(`${label}: page error: ${error.message}`));
+    await page.goto(url, {waitUntil: 'networkidle'});
+    await page.evaluate(() => document.fonts.ready);
+    if (out != null) await page.screenshot({path: join(out, `${name}-${shot.width}-${shot.scheme}.png`)});
+    const wide = shot.width >= 1024;
+    if (!wide) {
+      await page.getByRole('button', {name: en['outline.open'], exact: true}).click();
+      await page.getByRole('dialog').waitFor();
+    }
+    const rendered = await page.evaluate(roles => {
+      const found: Record<string, {size: number; leading: number} | null> = {};
+      for (const [role, selector] of Object.entries(roles)) {
+        const element = [...document.querySelectorAll(selector)].find(candidate => candidate.checkVisibility());
+        const style = element == null ? null : getComputedStyle(element);
+        found[role] = style == null ? null : {size: parseFloat(style.fontSize), leading: parseFloat(style.lineHeight)};
+      }
+      return found;
+    }, TYPE_ROLES);
+    const report: string[] = [];
+    for (const [role, expected] of scale) {
+      const actual = rendered[role];
+      if (actual == null) {
+        check(!complete || (role === 'outline label' && !wide), `${label}: no visible element shows the type role "${role}" (${TYPE_ROLES[role]})`);
+        continue;
+      }
+      const same = Math.abs(actual.size - expected.size) < 0.01 && Math.abs(actual.leading - expected.leading) <= LEADING_TOLERANCE;
+      check(same, `${label}: type role "${role}" renders ${actual.size} / ${actual.leading} px, REQUIREMENTS.md records ${expected.size} / ${expected.leading}`);
+      report.push(`${role} ${actual.size}/${Math.round(actual.leading * 100) / 100}`);
+    }
+    console.log(`${label}: type scale ${report.join('; ')}`);
+    await context.close();
+  }
+}
+
 /** Whether the entry the rail marks current lies inside the rail's visible part. */
 function currentInRail(page: Page): Promise<boolean> {
   return page.locator(`aside ${OUTLINE}`).evaluate(nav => {
@@ -589,6 +648,7 @@ async function main() {
   const server = await serve({
     '/': withEmbeddedPaste(shell, fixturePaste()),
     [LONG_PATH]: withEmbeddedPaste(shell, embeddedPaste('long', 'md', longMarkdown())),
+    [CHINESE_PATH]: withEmbeddedPaste(shell, fixturePaste(CHINESE_FIXTURE)),
   });
   const address = server.address();
   const url = typeof address === 'object' && address != null ? `http://127.0.0.1:${address.port}/` : '';
@@ -659,6 +719,8 @@ async function main() {
       await context.close();
     }
 
+    await checkTypeScale(browser, url, fixturePaste().paste.id, false);
+    await checkTypeScale(browser, `${url.slice(0, -1)}${CHINESE_PATH}`, 'zh', true, out);
     await checkTheme(browser, url, out);
     await checkWidthsAndTables(browser, url, fixturePaste().paste.id);
     const long = `${url.slice(0, -1)}${LONG_PATH}`;
