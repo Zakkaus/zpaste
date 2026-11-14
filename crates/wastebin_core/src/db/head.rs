@@ -25,6 +25,8 @@ pub struct Head {
     pub burn_after_reading: bool,
     /// Expiry in RFC 3339, UTC; `None` when the paste never expires
     pub expires_at: Option<String>,
+    /// Creation time in RFC 3339, UTC; `None` for pastes from before the column
+    pub created_at: Option<String>,
     /// Depth of the head version in the version chain, starting at 1
     pub version: u32,
     /// Id of the head version
@@ -52,7 +54,8 @@ pub struct ListPage {
 const HEAD_COLUMNS: &str = "e.id, e.uid, e.title, e.extension, e.nonce IS NOT NULL,
     COALESCE(e.burn_after_reading, 0), strftime('%Y-%m-%dT%H:%M:%SZ', e.expires),
     COALESCE(e.expires < datetime('now'), 0), r.version, r.version_id,
-    CASE WHEN ?2 THEN r.data END, CASE WHEN ?2 THEN r.nonce END";
+    CASE WHEN ?2 THEN r.data END, CASE WHEN ?2 THEN r.nonce END,
+    strftime('%Y-%m-%dT%H:%M:%SZ', e.created_at)";
 
 fn blob_error(
     index: usize,
@@ -81,6 +84,7 @@ fn head_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Head, Option<Stor
         encrypted: row.get(4)?,
         burn_after_reading: row.get(5)?,
         expires_at: row.get(6)?,
+        created_at: row.get(12)?,
         version: row.get(8)?,
         version_id: VersionId::from_bytes(version_id),
     };

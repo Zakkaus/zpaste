@@ -36,6 +36,9 @@ async fn create_returns_first_version() -> Result<(), Box<dyn std::error::Error>
     let expires_at = head.expires_at.as_deref().ok_or("no expiry")?;
     assert_eq!(expires_at.len(), "2026-11-21T13:00:00Z".len());
     assert!(expires_at.ends_with('Z'));
+    let created_at = head.created_at.as_deref().ok_or("no creation time")?;
+    assert_eq!(created_at.len(), "2026-11-14T13:00:00Z".len());
+    assert!(created_at < expires_at, "{created_at} {expires_at}");
 
     let (again, data) = db.head_with_data(head.id).await?;
     assert_eq!(again.version_id, head.version_id);
