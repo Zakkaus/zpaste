@@ -106,3 +106,13 @@ and will drift from Zpaste.
 Zpaste is released under the [MIT license](LICENSE). The license keeps
 Matthias Vogelgesang's copyright for wastebin and adds Zakkaus's copyright for
 Zpaste.
+
+## Credits
+
+The Zpaste logo is adapted from the [gentoo-zh logo](https://gentoozh.org/logo/),
+itself adapted from the Gentoo logo (vector versions copyright Gentoo Foundation
+and Lennart Andre Rolland), and is licensed under
+[CC BY-SA 2.5](https://creativecommons.org/licenses/by-sa/2.5/), not MIT. Its
+中 and 文 seal glyphs are public domain, from Wikimedia Commons. The full
+attribution chain and the files it covers are in
+[web/src/brand/NOTICE.md](web/src/brand/NOTICE.md).
