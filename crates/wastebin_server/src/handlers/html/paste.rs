@@ -6,7 +6,7 @@ use axum::response::{IntoResponse, Response};
 use axum_extra::extract::SignedCookieJar;
 use serde::Deserialize;
 
-use crate::cache::{Key, Mode};
+use crate::cache::Key;
 use crate::client::{ClientKey, RateLimit};
 use crate::handlers::extract::{Theme, Uids, verify_owner_token};
 use crate::handlers::html::{BurnConfirmation, FormAction, PasswordInput, make_error_response};
@@ -291,7 +291,7 @@ pub async fn post<E>(
             _ => false,
         };
 
-        let html = if let Some(html) = cache.get(&key, Mode::Source) {
+        let html = if let Some(html) = cache.get(&key) {
             tracing::trace!(?key, "found cached item");
             html.into_inner()
         } else {
@@ -302,7 +302,7 @@ pub async fn post<E>(
 
             if is_available && no_password {
                 tracing::trace!(?key, "cache item");
-                cache.put(&key, Mode::Source, html.clone());
+                cache.put(&key, html.clone());
             }
 
             html.into_inner()

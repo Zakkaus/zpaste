@@ -32,35 +32,10 @@ pub(crate) fn valid_extension(extension: &str) -> bool {
         })
 }
 
-/// Which representation of a paste a cached entry holds.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum Mode {
-    /// Syntax-highlighted source view.
-    Source,
-}
-
-/// Internal cache slot partitioning cached HTML by paste identity and render mode.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct Slot {
-    id: Id,
-    ext: Option<String>,
-    mode: Mode,
-}
-
-impl Slot {
-    fn new(key: &Key, mode: Mode) -> Self {
-        Self {
-            id: key.id,
-            ext: key.ext.clone(),
-            mode,
-        }
-    }
-}
-
-/// Stores formatted HTML.
+/// Stores the syntax-highlighted HTML of a paste, by identifier and extension.
 #[derive(Clone)]
 pub(crate) struct Cache {
-    inner: Arc<Mutex<LruCache<Slot, Html>>>,
+    inner: Arc<Mutex<LruCache<Key, Html>>>,
 }
 
 impl Cache {
@@ -71,18 +46,18 @@ impl Cache {
         Ok(Self { inner })
     }
 
-    pub fn put(&self, key: &Key, mode: Mode, value: Html) {
+    pub fn put(&self, key: &Key, value: Html) {
         self.inner
             .lock()
             .expect("getting lock")
-            .cache_set(Slot::new(key, mode), value);
+            .cache_set(key.clone(), value);
     }
 
-    pub fn get(&self, key: &Key, mode: Mode) -> Option<Html> {
+    pub fn get(&self, key: &Key) -> Option<Html> {
         self.inner
             .lock()
             .expect("getting lock")
-            .cache_get(&Slot::new(key, mode))
+            .cache_get(key)
             .cloned()
     }
 }
