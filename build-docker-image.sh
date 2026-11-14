@@ -6,33 +6,33 @@ set -o pipefail
 
 VERSION=$(git describe --tags)
 
-docker build --target amd64 -t quxfoo/wastebin:${VERSION}-amd64 .
-docker build --target arm64 -t quxfoo/wastebin:${VERSION}-arm64 .
+docker build --target amd64 -t ghcr.io/zakkaus/zpaste:${VERSION}-amd64 .
+docker build --target arm64 -t ghcr.io/zakkaus/zpaste:${VERSION}-arm64 .
 
-docker push quxfoo/wastebin:${VERSION}-amd64
-docker push quxfoo/wastebin:${VERSION}-arm64
+docker push ghcr.io/zakkaus/zpaste:${VERSION}-amd64
+docker push ghcr.io/zakkaus/zpaste:${VERSION}-arm64
 
-docker manifest create quxfoo/wastebin:${VERSION} \
-    quxfoo/wastebin:${VERSION}-amd64 \
-    quxfoo/wastebin:${VERSION}-arm64
+docker manifest create ghcr.io/zakkaus/zpaste:${VERSION} \
+    ghcr.io/zakkaus/zpaste:${VERSION}-amd64 \
+    ghcr.io/zakkaus/zpaste:${VERSION}-arm64
 
-docker manifest annotate quxfoo/wastebin:${VERSION} \
-    quxfoo/wastebin:${VERSION}-arm64 \
+docker manifest annotate ghcr.io/zakkaus/zpaste:${VERSION} \
+    ghcr.io/zakkaus/zpaste:${VERSION}-arm64 \
     --os linux \
     --arch arm64
 
-docker manifest rm quxfoo/wastebin:latest 2>/dev/null || true
+docker manifest rm ghcr.io/zakkaus/zpaste:latest 2>/dev/null || true
 
-docker manifest create quxfoo/wastebin:latest \
-    quxfoo/wastebin:${VERSION}-amd64 \
-    quxfoo/wastebin:${VERSION}-arm64
+docker manifest create ghcr.io/zakkaus/zpaste:latest \
+    ghcr.io/zakkaus/zpaste:${VERSION}-amd64 \
+    ghcr.io/zakkaus/zpaste:${VERSION}-arm64
 
-docker manifest annotate quxfoo/wastebin:latest \
-    quxfoo/wastebin:${VERSION}-arm64 \
+docker manifest annotate ghcr.io/zakkaus/zpaste:latest \
+    ghcr.io/zakkaus/zpaste:${VERSION}-arm64 \
     --os linux \
     --arch arm64
 
-docker manifest inspect quxfoo/wastebin:${VERSION}
+docker manifest inspect ghcr.io/zakkaus/zpaste:${VERSION}
 
-docker manifest push quxfoo/wastebin:${VERSION}
-docker manifest push quxfoo/wastebin:latest
+docker manifest push ghcr.io/zakkaus/zpaste:${VERSION}
+docker manifest push ghcr.io/zakkaus/zpaste:latest

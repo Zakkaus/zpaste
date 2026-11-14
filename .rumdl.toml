@@ -6,7 +6,7 @@ allowed-elements = ["a", "img", "kbd", "p", "strong"]
 headings = false
 code-blocks = false
 
-# The README and the CHANGELOG link to rendered examples as "here".
+# The upstream README and CHANGELOG link to rendered examples as "here".
 [per-file-ignores]
-"CHANGELOG.md" = ["MD059"]
-"README.md" = ["MD059"]
+"docs/upstream/CHANGELOG.md" = ["MD059"]
+"docs/upstream/WASTEBIN-README.md" = ["MD059"]

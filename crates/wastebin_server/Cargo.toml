@@ -40,3 +40,9 @@ tower = { version = "0.5", default-features = false, features = ["util", "make"]
 
 [lints]
 workspace = true
+
+# The package keeps the upstream name so merges from wastebin stay clean; only
+# the installed executable is renamed.
+[[bin]]
+name = "zpaste"
+path = "src/main.rs"

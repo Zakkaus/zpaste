@@ -31,7 +31,7 @@ RUN cargo zigbuild \
     --release \
     --target aarch64-unknown-linux-musl \
     --target x86_64-unknown-linux-musl \
-    --bin wastebin \
+    --bin zpaste \
     --bin wastebin-ctl
 
 RUN adduser \
@@ -52,10 +52,10 @@ COPY --from=builder /etc/passwd /etc/passwd
 COPY --from=builder /etc/group /etc/group
 
 WORKDIR /app
-COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/wastebin ./
+COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/zpaste ./
 COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/wastebin-ctl ./
 USER app:app
-CMD ["/app/wastebin"]
+CMD ["/app/zpaste"]
 
 # --- aarch64-unknown-linux-musl final image
 
@@ -65,7 +65,7 @@ COPY --from=builder /etc/passwd /etc/passwd
 COPY --from=builder /etc/group /etc/group
 
 WORKDIR /app
-COPY --from=builder /app/target/aarch64-unknown-linux-musl/release/wastebin ./
+COPY --from=builder /app/target/aarch64-unknown-linux-musl/release/zpaste ./
 COPY --from=builder /app/target/aarch64-unknown-linux-musl/release/wastebin-ctl ./
 USER app:app
-CMD ["/app/wastebin"]
+CMD ["/app/zpaste"]
