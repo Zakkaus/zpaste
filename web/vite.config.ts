@@ -12,6 +12,30 @@ function devFixture(): Plugin {
   };
 }
 
+/**
+ * Preloads the Latin Figtree files src/theme/figtree.css declares, so they load beside the script rather
+ * than after the stylesheet and the first render ask for them: their faces are `font-display: optional`,
+ * and a face that is not there for the first paint is not used at all.
+ */
+function preloadFonts(): Plugin {
+  return {
+    name: 'zpaste-preload-fonts',
+    apply: 'build',
+    transformIndexHtml: {
+      order: 'post',
+      handler: (_html, context) =>
+        Object.keys(context.bundle ?? {})
+          .filter(file => /\/figtree-latin-\d+-normal-[\w-]+\.woff2$/.test(file))
+          .sort()
+          .map(file => ({
+            tag: 'link',
+            attrs: {rel: 'preload', href: `/${file}`, as: 'font', type: 'font/woff2', crossorigin: ''},
+            injectTo: 'head' as const,
+          })),
+    },
+  };
+}
+
 /** The same StyleX options as gentoozh.org: own class prefix, rules after the Astryx theme layer. */
 export function stylexPlugin() {
   return stylex({
@@ -30,6 +54,7 @@ export default defineConfig({
     react(),
     stylexPlugin(),
     devFixture(),
+    preloadFonts(),
   ],
   build: {
     target: 'es2023',

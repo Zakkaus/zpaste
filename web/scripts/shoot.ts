@@ -12,7 +12,8 @@
 // 390 and 1280 px, in the paste and in the committed Chinese fixtures, which have every role. The
 // Traditional fixture is marked zh-Hant and drawn with a Traditional Chinese face, the Simplified one
 // zh-Hans with a Simplified face, and an English paste keeps the page's language. The top bar's buttons
-// share one size and icon size.
+// share one size and icon size. On a slow link and processor with a cold cache, the top bar and the title
+// row's actions paint at their final size and place from the first frame, and the page barely shifts.
 //
 //   node scripts/shoot.ts <out-dir>        ZPASTE_FIXTURE=<file.md> picks the paste; CHROME=<path> the browser;
 //                                          ZPASTE_DIST=<dir> another build (default web/dist).
@@ -70,6 +71,16 @@ const COPY = `[role="group"][aria-label="${en['action.actions']}"] button`;
 const CONTENT = 'div:has(> .astryx-markdown, > .astryx-code-block)';
 /** Heights of the header shots: the top bar, the title row and the paste's first heading. */
 const HEADER_HEIGHT = {wide: 256, narrow: 380};
+/**
+ * The first-paint check's link and processor, a remote reader's: Chrome DevTools' Fast 3G (562.5 ms
+ * round trip, 1.44 Mbit/s down, 675 kbit/s up) and a CPU 4x slower, cold cache.
+ */
+const SLOW_LINK = {offline: false, latency: 562.5, downloadThroughput: 180_000, uploadThroughput: 84_375};
+const SLOW_CPU = 4;
+/** The largest cumulative layout shift the reading page may have while it loads. */
+const CLS_MAX = 0.01;
+/** The controls that must paint at their final size and place: the top bar's and the title row's. */
+const STEADY_CONTROLS = `[role="banner"] :is(button, a), [role="group"][aria-label="${en['action.actions']}"] > *`;
 
 /** Serves `pages[path]` for each page path (`/` and LONG_PATH) and dist/ for the rest. */
 function serve(pages: Record<string, string>): Promise<Server> {
@@ -509,6 +520,77 @@ async function checkTopBar(page: Page, name: string, wide: boolean) {
 }
 
 /**
+ * Records, from the page's first script, every layout shift with the controls of STEADY_CONTROLS it
+ * moved, and on every animation frame where those controls exist their boxes. Installed before the
+ * page's own scripts.
+ */
+function recordLoading(selector: string) {
+  const shifts: {value: number; controls: string[]}[] = [];
+  const layouts: string[] = [];
+  const name = (element: Element) => element.getAttribute('aria-label') ?? element.textContent?.trim() ?? element.tagName;
+  new PerformanceObserver(list => {
+    for (const entry of list.getEntries() as (PerformanceEntry & {value: number; hadRecentInput: boolean; sources?: {node?: Node}[]})[]) {
+      if (entry.hadRecentInput) continue;
+      const controls = [...document.querySelectorAll(selector)];
+      const moved = (entry.sources ?? []).flatMap(source => {
+        const node = source.node;
+        if (node == null) return [];
+        return controls.filter(control => control.contains(node) || node.contains(control)).map(name);
+      });
+      shifts.push({value: entry.value, controls: moved});
+    }
+  }).observe({type: 'layout-shift', buffered: true});
+  const tick = () => {
+    const controls = [...document.querySelectorAll(selector)].filter(element => element.checkVisibility());
+    if (controls.length > 0) {
+      const layout = controls
+        .map(element => {
+          const box = element.getBoundingClientRect();
+          return `${name(element)} ${[box.x, box.y, box.width, box.height].map(value => Math.round(value * 10) / 10).join(',')}`;
+        })
+        .join(' | ');
+      if (layouts.at(-1) !== layout) layouts.push(layout);
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+  Object.assign(window, {zpasteLoading: {shifts, layouts}});
+}
+
+/**
+ * The page's first paint is its final layout. On a slow link and processor with a cold cache (SLOW_LINK,
+ * SLOW_CPU), at 390 and 1280 px: the top bar's buttons and the title row's actions keep the size and
+ * place of the first frame they appear in, through the web font's arrival, no layout shift moves them,
+ * and the page's cumulative layout shift stays under CLS_MAX.
+ */
+async function checkFirstPaint(browser: Browser, url: string) {
+  for (const width of [390, 1280]) {
+    const name = `first paint ${width}px`;
+    const context = await browser.newContext({viewport: {width, height: width < 1024 ? 844 : 800}, deviceScaleFactor: 2});
+    await context.addInitScript(recordLoading, STEADY_CONTROLS);
+    const page = await context.newPage();
+    page.on('pageerror', error => failures.push(`${name}: page error: ${error.message}`));
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Network.enable');
+    await cdp.send('Network.setCacheDisabled', {cacheDisabled: true});
+    await cdp.send('Network.emulateNetworkConditions', SLOW_LINK);
+    await cdp.send('Emulation.setCPUThrottlingRate', {rate: SLOW_CPU});
+    await page.goto(url, {waitUntil: 'networkidle', timeout: 120_000});
+    await page.evaluate(() => document.fonts.ready);
+    // Frames after the fonts settle, so a late reflow would be recorded.
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const {shifts, layouts} = await page.evaluate(() => (window as unknown as {zpasteLoading: {shifts: {value: number; controls: string[]}[]; layouts: string[]}}).zpasteLoading);
+    const cls = shifts.reduce((sum, shift) => sum + shift.value, 0);
+    const moved = [...new Set(shifts.flatMap(shift => shift.controls))];
+    check(layouts.length === 1, `${name}: the controls change layout while loading ${JSON.stringify(layouts)}`);
+    check(moved.length === 0, `${name}: a layout shift moves ${JSON.stringify(moved)}`);
+    check(cls < CLS_MAX, `${name}: cumulative layout shift ${cls.toFixed(4)}, at least ${CLS_MAX}`);
+    console.log(`${name}: CLS ${cls.toFixed(4)} in ${shifts.length} shift(s); ${layouts.length} layout(s) of the controls`);
+    await context.close();
+  }
+}
+
+/**
  * A Chinese fixture is marked with its script's language on the paste's text only, and Chrome draws its
  * Chinese with a face of that script (CSS.getPlatformFontsForNode on the first paragraph). Returns the
  * face, so the caller can check that the two scripts get different faces.
@@ -811,6 +893,7 @@ async function main() {
     check(new Set(faces).size === faces.length, `the Chinese fixtures share the face ${faces.join(' / ')}`);
     if (process.env.ZPASTE_FIXTURE == null) await checkNoLanguage(browser, url, fixturePaste().paste.id);
     await checkTheme(browser, url, out);
+    await checkFirstPaint(browser, url);
     await checkWidthsAndTables(browser, url, fixturePaste().paste.id);
     const long = `${url.slice(0, -1)}${LONG_PATH}`;
     await checkWidthsAndTables(browser, long, 'long');

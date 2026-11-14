@@ -1,9 +1,7 @@
 import '@astryxdesign/core/reset.css';
 import '@astryxdesign/core/astryx.css';
 import '@gentoozh/astryx-theme/gentoo.css';
-import '@fontsource/figtree/400.css';
-import '@fontsource/figtree/500.css';
-import '@fontsource/figtree/600.css';
+import './theme/figtree.css';
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import {App} from './App';

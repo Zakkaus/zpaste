@@ -95,7 +95,7 @@ The rest of the axes the positioning leaves to decide:
 
 ## The reading page's first screen
 
-Proposed for the owner's approval with the P1 first screen; each value is a theme token or role.
+Approved with the P1 first screen (see [Approval gates](#approval-gates)); each value is a theme token or role.
 
 - **Top bar.** Opaque `--color-background-surface` with a hairline under it. Its
   content edges are the page frame's: the product name starts where the paste
@@ -185,6 +185,12 @@ Chinese.
   list gentoozh.org uses on its English pages. Every weight in use is a real
   face (Noto Sans CJK Regular, Medium for the table header, Bold for the
   semibold headings); Chrome synthesizes no bold.
+- **Font loading.** As on gentoozh.org, Figtree's faces are
+  `font-display: optional` and the page preloads the Latin files of the three
+  weights it draws (400, 500, 600), so the first paint already uses Figtree. With
+  `swap`, a slow link painted the fallback face first and the buttons narrowed
+  when Figtree arrived, which the owner saw as the buttons hitching while the
+  page loaded. A view whose face misses the first paint keeps the fallback.
 - **Glyph forms.** The theme's list names the Simplified faces first, which
   would draw a Traditional paste with mainland glyph forms, its `，` and `。` at
   the bottom left rather than centred. The forms follow the paste's own text,
@@ -305,11 +311,11 @@ The baseline is [web/AGENTS.md](../web/AGENTS.md), "Accessibility". Zpaste adds:
 
 The plan requires one screen to be approved before a pattern spreads.
 
-| Gate | Screen | Waits on it |
-| --- | --- | --- |
-| P1 reading page | `r8BaRKfkXfi` rendered at 1280 px light and 390 px dark | The type scale, spacing, readable column width, outline placement, table and code treatment; then the error, password and burn screens, the three locales and the new-paste page. |
-| P1b mind map | markmap's default style and the token-drawn style side by side, 1280 px light and 390 px dark | The layout library choice and every rule in [Mind map](#mind-map). |
-| P2b workspace | A workspace with several plans and results, 1280 px light and 390 px dark | The list grouping, the two-pane wide layout and the two-level phone flow. |
+| Gate | Screen | Waits on it | State |
+| --- | --- | --- | --- |
+| P1 reading page | `r8BaRKfkXfi` rendered at 1280 px light and 390 px dark | The type scale, spacing, readable column width, outline placement, table and code treatment; then the error, password and burn screens, the three locales and the new-paste page. | Approved. Owner, 2026-11-15: 「按鈕加載的時候卡了下 其他都可以了」; the hitch was the web font swapping in, fixed as [Chinese text](#chinese-text), "Font loading", records. |
+| P1b mind map | markmap's default style and the token-drawn style side by side, 1280 px light and 390 px dark | The layout library choice and every rule in [Mind map](#mind-map). | Waiting |
+| P2b workspace | A workspace with several plans and results, 1280 px light and 390 px dark | The list grouping, the two-pane wide layout and the two-level phone flow. | Waiting |
 
 ## Deliberately not doing
 
