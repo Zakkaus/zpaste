@@ -442,10 +442,22 @@ Target migrations:
 
 Migration 8 (P1) adds the `extension` column (set at creation, never changed;
 empty for old pastes), the `created_at` column (empty for old pastes) and the
-`revisions` table with the backfill described above. It was verified on a copy
-of the live database. An older executable refuses a migrated database
-(`DatabaseTooFarAhead`), so a rollback past a migration restores the backup;
-see [workflow.md](workflow.md).
+`revisions` table with the backfill described above. Revision 1 copies every
+paste's stored bytes, so `state.db` roughly doubles, and the entry row keeps
+its own copy until P2 may store the current content only once. The migration
+runs in one transaction: if the volume is full it fails with `SQLITE_FULL`,
+rolls back, and `user_version` stays 7; rerun it after freeing space.
+
+It was verified on a copy of the live database on 2026-11-15: 867 entries (19
+encrypted, 2 burn-after-reading, 268 expired) gained 867 revisions, with 0
+mismatches against version ids computed by an independent Python hasher;
+`PRAGMA integrity_check` answered `ok`, `user_version` read 8, and `/raw`
+returned a sha256 identical to the old build's for all 590 readable ids. The
+file grew from 7,368,704 to 14,782,464 bytes; the migration took 0.156 s on a
+debug build, process start included.
+
+An older executable refuses a migrated database (`DatabaseTooFarAhead`), so a
+rollback past a migration restores the backup; see [workflow.md](workflow.md).
 
 ## Reliability
 

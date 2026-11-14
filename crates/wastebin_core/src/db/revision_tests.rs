@@ -196,6 +196,31 @@ async fn insert_writes_first_revision() -> TestResult {
 }
 
 #[tokio::test]
+async fn failed_first_revision_rolls_back_the_entry() -> TestResult {
+    let mut handler = Handler::new(Open::Memory, receiver())?;
+
+    crate::revision::fail_next_insert_first();
+    assert!(handler.insert(stored("lost", None).await?).is_err());
+
+    // The entry insert shares the transaction with version 1, so neither row survives.
+    for table in ["entries", "revisions"] {
+        let rows: i64 =
+            handler
+                .conn
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })?;
+        assert_eq!(rows, 0, "{table} kept a row after the failed insert");
+    }
+
+    // The injection fires once: the next insert works.
+    let (id, _) = handler.insert(stored("kept", None).await?)?;
+    assert_first_revision(&handler.conn, id.to_i64())?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn deleting_an_entry_deletes_its_revisions() -> TestResult {
     let mut handler = Handler::new(Open::Memory, receiver())?;
 

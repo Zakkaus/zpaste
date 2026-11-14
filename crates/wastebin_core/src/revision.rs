@@ -2,6 +2,9 @@
 
 use std::fmt;
 
+#[cfg(test)]
+use std::cell::Cell;
+
 use rusqlite::{Transaction, params};
 use sha2::{Digest, Sha256};
 
@@ -56,6 +59,19 @@ impl fmt::Display for VersionId {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Makes the next `insert_first` on this thread fail once, so a test can prove that the entry
+    /// insert and version 1 share one transaction.
+    static FAIL_NEXT_INSERT_FIRST: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Make the next `insert_first` on this thread return an error.
+#[cfg(test)]
+pub(crate) fn fail_next_insert_first() {
+    FAIL_NEXT_INSERT_FIRST.set(true);
+}
+
 /// Write version 1 of entry `entry_id` from the bytes `entries` holds for it.
 ///
 /// The row copies `data`, `nonce`, `title` and `created_at` from `entries` inside `tx`, so the
@@ -66,6 +82,11 @@ pub(crate) fn insert_first(
     data: &[u8],
     title: Option<&str>,
 ) -> rusqlite::Result<VersionId> {
+    #[cfg(test)]
+    if FAIL_NEXT_INSERT_FIRST.replace(false) {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+
     let version_id = VersionId::compute(None, data, title);
 
     tx.execute(
