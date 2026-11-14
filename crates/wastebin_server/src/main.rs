@@ -1,6 +1,7 @@
 mod assets;
 mod cache;
 mod client;
+mod csp;
 mod env;
 mod errors;
 mod handlers;
@@ -96,10 +97,6 @@ impl FromRef<AppState> for Cache {
 }
 
 async fn security_headers_layer(req: Request, next: Next) -> Response {
-    const CSP_STRICT: HeaderValue = HeaderValue::from_static(
-        "default-src 'none'; script-src 'self'; img-src 'self' data: ; style-src 'self' data: ; font-src 'self' data: ; object-src 'none' ; base-uri 'none' ; frame-ancestors 'none' ; form-action 'self' ;",
-    );
-
     let headers: [(HeaderName, HeaderValue); 6] = [
         (SERVER, HeaderValue::from_static(env!("CARGO_PKG_NAME"))),
         (REFERRER_POLICY, HeaderValue::from_static("same-origin")),
@@ -113,11 +110,11 @@ async fn security_headers_layer(req: Request, next: Next) -> Response {
     ];
 
     let mut response = (headers, next.run(req).await).into_response();
-    // A reading page brings its own policy (`web::Web::csp`).
+    // A reading page and an SVG with inline styles bring their own policy (`csp::widened`).
     response
         .headers_mut()
         .entry(CONTENT_SECURITY_POLICY)
-        .or_insert(CSP_STRICT);
+        .or_insert_with(|| csp::STRICT.clone());
     response
 }
 

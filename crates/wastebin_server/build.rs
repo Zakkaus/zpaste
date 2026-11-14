@@ -1,7 +1,8 @@
 //! Embeds the built web app (`web/dist`, from `pnpm build`) in the executable.
 //!
-//! Writes `$OUT_DIR/web_dist.rs` with the page template, the files to serve and the style hashes of
-//! the reading page's Content Security Policy (`style-src.txt`, from `web/scripts/style-hashes.ts`).
+//! Writes `$OUT_DIR/web_dist.rs` with the page template, the files to serve, the style hashes of
+//! the reading page's Content Security Policy (`style-src.txt`) and those of each SVG file's own
+//! inline styles (`svg-style-src.txt`), both from `web/scripts/style-hashes.ts`.
 //! `ZPASTE_WEB_DIST` names another build directory. Without a build the executable serves a
 //! placeholder page and says so at build time, so `cargo build` and `cargo test` work without Node;
 //! `ZPASTE_REQUIRE_WEB=1` (set by the Dockerfile) turns that into an error.
@@ -12,8 +13,9 @@ use std::{env, fs};
 
 /// Strings the server splits the page template at (`src/web/shell.rs`); each occurs exactly once.
 const MARKERS: [&str; 3] = ["<title>", "</title>", "<div id=\"root\"></div>"];
-/// The hashes file, which the server reads here and does not serve.
+/// The hashes files, which the server reads here and does not serve.
 const STYLE_SRC: &str = "style-src.txt";
+const SVG_STYLE_SRC: &str = "svg-style-src.txt";
 
 fn main() -> Result<(), String> {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
@@ -45,6 +47,7 @@ fn main() -> Result<(), String> {
             "pub(crate) const BUILT: bool = false;\n\
              pub(crate) const INDEX: &str = include_str!({placeholder:?});\n\
              pub(crate) const STYLE_SRC: &[&str] = &[];\n\
+             pub(crate) const SVG_STYLE_SRC: &[(&str, &[&str])] = &[];\n\
              pub(crate) const FILES: &[(&str, &[u8])] = &[];\n"
         )
     };
@@ -56,24 +59,19 @@ fn main() -> Result<(), String> {
 fn built(dist: &Path, index: &Path) -> Result<String, String> {
     check_markers(index);
 
-    let style_src = fs::read_to_string(dist.join(STYLE_SRC)).map_err(|err| {
-        format!(
-            "{}: {err}; build web/ with `pnpm build`",
-            dist.join(STYLE_SRC).display()
-        )
-    })?;
+    let style_src = read_hashes(dist, STYLE_SRC)?;
     let sources: Vec<&str> = style_src.lines().filter(|line| !line.is_empty()).collect();
-    for source in &sources {
-        let valid = source
-            .strip_prefix("'sha256-")
-            .and_then(|rest| rest.strip_suffix('\''))
-            .is_some_and(|hash| {
-                hash.len() == 44
-                    && hash
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='))
-            });
-        assert!(valid, "{STYLE_SRC}: not a sha256 source: {source}");
+    check_sources(STYLE_SRC, &sources);
+    let svg_style_src = read_hashes(dist, SVG_STYLE_SRC)?;
+    let svg_sources: Vec<(&str, Vec<&str>)> = svg_style_src
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            Some((fields.next()?, fields.collect()))
+        })
+        .collect();
+    for (_, sources) in &svg_sources {
+        check_sources(SVG_STYLE_SRC, sources);
     }
 
     let mut files = Vec::new();
@@ -86,6 +84,11 @@ fn built(dist: &Path, index: &Path) -> Result<String, String> {
         "pub(crate) const INDEX: &str = include_str!({index:?});"
     );
     let _ = writeln!(code, "pub(crate) const STYLE_SRC: &[&str] = &{sources:?};");
+    code.push_str("pub(crate) const SVG_STYLE_SRC: &[(&str, &[&str])] = &[\n");
+    for (route, sources) in svg_sources {
+        let _ = writeln!(code, "    ({route:?}, &{sources:?}),");
+    }
+    code.push_str("];\n");
     code.push_str("pub(crate) const FILES: &[(&str, &[u8])] = &[\n");
     for (route, path) in files {
         let _ = writeln!(code, "    ({route:?}, include_bytes!({path:?})),");
@@ -104,9 +107,34 @@ fn collect(root: &Path, dir: &Path, files: &mut Vec<(String, PathBuf)>) {
         }
         let relative = path.strip_prefix(root).expect("under web/dist");
         let route = format!("/{}", relative.to_str().expect("UTF-8 file name"));
-        if route != "/index.html" && route != format!("/{STYLE_SRC}") {
+        let hashes = [STYLE_SRC, SVG_STYLE_SRC].map(|name| format!("/{name}"));
+        if route != "/index.html" && !hashes.contains(&route) {
             files.push((route, path));
         }
+    }
+}
+
+fn read_hashes(dist: &Path, name: &str) -> Result<String, String> {
+    fs::read_to_string(dist.join(name)).map_err(|err| {
+        format!(
+            "{}: {err}; build web/ with `pnpm build`",
+            dist.join(name).display()
+        )
+    })
+}
+
+fn check_sources(file: &str, sources: &[&str]) {
+    for source in sources {
+        let valid = source
+            .strip_prefix("'sha256-")
+            .and_then(|rest| rest.strip_suffix('\''))
+            .is_some_and(|hash| {
+                hash.len() == 44
+                    && hash
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='))
+            });
+        assert!(valid, "{file}: not a sha256 source: {source}");
     }
 }
 

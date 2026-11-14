@@ -268,7 +268,9 @@ plain text. Other app routes are `/<id>/edit`, `/<id>/history`, `/` (new paste),
 
 The reading page's Content Security Policy keeps upstream's strict base and adds
 `connect-src 'self'` and `img-src 'self' https: data:` (invariant 17), as
-upstream allowed images on `/md/`; every other page keeps upstream's policy. The app draws a Markdown
+upstream allowed images on `/md/`; every other page keeps upstream's policy.
+`crates/wastebin_server/src/csp.rs` defines the base once and derives every
+wider policy from it. The app draws a Markdown
 image with `loading="lazy"` and `referrerpolicy="no-referrer"`, and an image
 that is blocked or fails to load gives way to its alt text in brackets.
 `web/scripts/shoot.ts` serves every page with this policy and fails on any
@@ -279,7 +281,10 @@ the layer slide rules, `#astryx-layer-slide-rules`), so the policy admits
 exactly those two texts by their `sha256` hashes, never `'unsafe-inline'`
 (A13). `pnpm build` computes them: `web/scripts/style-hashes.ts` runs the two
 Astryx modules the bundle is built from and writes `dist/style-src.txt`, which
-the server embeds and `shoot.ts` serves. An Astryx upgrade that changes either
+the server embeds and `shoot.ts` serves. It also writes
+`dist/svg-style-src.txt` with the hashes of each SVG file's own `<style>`
+elements (the favicon's light and dark colours), which the server admits on
+that file's response only. An Astryx upgrade that changes either
 text changes its hash in the same build; a hash that does not match shows as a
 violation in `shoot.ts`, in CI against `dist/` and locally against a server
 (`ZPASTE_SERVER`). The start-up script is an external file. The only

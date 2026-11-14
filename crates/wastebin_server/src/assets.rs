@@ -70,6 +70,8 @@ pub(crate) struct Asset {
     /// Whether the route names this content only, so a cache may keep it for [`MAX_AGE`];
     /// otherwise a cache must revalidate it.
     immutable: bool,
+    /// The response's own Content Security Policy, in place of the strict one.
+    policy: Option<HeaderValue>,
 }
 
 /// Asset kind.
@@ -142,6 +144,15 @@ impl Asset {
             brotli,
             gzip,
             immutable,
+            policy: None,
+        }
+    }
+
+    /// The asset served with `policy` as its Content Security Policy.
+    pub fn with_policy(self, policy: HeaderValue) -> Self {
+        Self {
+            policy: Some(policy),
+            ..self
         }
     }
 
@@ -194,6 +205,10 @@ impl Asset {
                 http::header::CONTENT_ENCODING,
                 HeaderValue::from_static(value),
             );
+        }
+
+        if let Some(policy) = &self.policy {
+            headers.insert(http::header::CONTENT_SECURITY_POLICY, policy.clone());
         }
 
         response

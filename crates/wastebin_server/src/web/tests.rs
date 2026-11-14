@@ -54,14 +54,32 @@ async fn page(client: &Client, path: &str, authorization: Option<&str>) -> reqwe
     request.send().await.expect("page")
 }
 
+/// With a build, the policy admits exactly the two styles Astryx inserts, and the bundle has both
+/// injectors. CI builds `web/` before this test and sets `ZPASTE_REQUIRE_WEB=1`, so `build.rs`
+/// fails rather than leave nothing to check.
 #[test]
 fn reading_policy_admits_the_build_styles_and_no_inline() {
     let csp = WEB.csp.to_str().unwrap();
+    assert_eq!(dist::STYLE_SRC.len(), if dist::BUILT { 2 } else { 0 });
     for source in dist::STYLE_SRC {
         assert!(csp.contains(source), "{csp}");
     }
-    assert!(csp.contains("img-src 'self' https: data:;"), "{csp}");
-    assert!(csp.contains("connect-src 'self';"), "{csp}");
+    let bundle: Vec<&[u8]> = dist::FILES
+        .iter()
+        .filter(|(route, _)| route.starts_with("/assets/") && route.ends_with(".js"))
+        .map(|(_, content)| *content)
+        .collect();
+    for injector in ["data-astryx-highlight-styles", "astryx-layer-slide-rules"] {
+        assert_eq!(
+            bundle
+                .iter()
+                .any(|js| js.windows(injector.len()).any(|w| w == injector.as_bytes())),
+            dist::BUILT,
+            "{injector}"
+        );
+    }
+    assert!(csp.contains("img-src 'self' data: https:;"), "{csp}");
+    assert!(csp.ends_with("; connect-src 'self'"), "{csp}");
     assert!(csp.contains("script-src 'self';"), "{csp}");
     assert!(!csp.contains("unsafe"), "{csp}");
 }
@@ -376,6 +394,28 @@ async fn web_files_are_served_with_their_cache_policy() {
             cache_control.contains("no-cache"),
             !hashed,
             "{cache_control}"
+        );
+
+        // An SVG file's own `<style>` elements are admitted on its response only.
+        let csp = res.headers()[header::CONTENT_SECURITY_POLICY]
+            .to_str()
+            .unwrap();
+        let sources = dist::SVG_STYLE_SRC
+            .iter()
+            .find(|(route, _)| *route == asset.route())
+            .map_or(&[][..], |(_, sources)| *sources);
+        assert_eq!(
+            csp,
+            crate::csp::widened(&[("style-src", &sources.join(" "))]),
+            "{}",
+            asset.route()
+        );
+    }
+    if dist::BUILT {
+        assert!(
+            dist::SVG_STYLE_SRC
+                .iter()
+                .any(|(route, _)| *route == "/favicon.svg")
         );
     }
 }

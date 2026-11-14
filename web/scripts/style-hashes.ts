@@ -7,15 +7,18 @@
 //
 // Writes dist/style-src.txt, one `'sha256-...'` source per line, which the server's build embeds
 // (crates/wastebin_server/build.rs) and scripts/shoot.ts serves. A hash that does not match what the
-// page inserts shows as a policy violation in shoot.ts. Exit 1 when the bundle lacks one of the
-// injectors, 2 when the hashes cannot be written.
+// page inserts shows as a policy violation in shoot.ts. Also writes dist/svg-style-src.txt, one line
+// per SVG file with `<style>` elements: its route and the hash of each, which the server admits on
+// that file's own response only. Exit 1 when the bundle lacks one of the injectors, 2 when the hashes
+// cannot be written.
 import {createHash} from 'node:crypto';
 import {readFileSync, readdirSync, writeFileSync} from 'node:fs';
-import {dirname, join} from 'node:path';
+import {dirname, join, sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 export const DIST = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist');
 export const STYLE_SRC_FILE = 'style-src.txt';
+export const SVG_STYLE_SRC_FILE = 'svg-style-src.txt';
 
 /** Each run-time style: the Astryx module that inserts it and a string the bundle has only when that module is in it. */
 const STYLES = [
@@ -31,6 +34,11 @@ export function cspHash(text: string): string {
 /** The styles whose injector `bundle` (the built JavaScript) does not contain. */
 export function missingInjectors(bundle: string): string[] {
   return STYLES.filter(style => !bundle.includes(style.marker)).map(style => style.name);
+}
+
+/** The text of each `<style>` element in `svg`, as the browser hashes it. */
+export function svgStyleTexts(svg: string): string[] {
+  return [...svg.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/g)].map(match => match[1]!);
 }
 
 let texts: Promise<string[]> | undefined;
@@ -80,6 +88,12 @@ async function main() {
   const sources = (await styleTexts()).map(cspHash);
   writeFileSync(join(DIST, STYLE_SRC_FILE), `${sources.join('\n')}\n`);
   console.log(`style-hashes: ${sources.length} sources in ${STYLE_SRC_FILE}`);
+  const svgs = readdirSync(DIST, {recursive: true, encoding: 'utf8'})
+    .filter(file => file.endsWith('.svg'))
+    .map(file => ({route: `/${file.split(sep).join('/')}`, sources: svgStyleTexts(readFileSync(join(DIST, file), 'utf8')).map(cspHash)}))
+    .filter(svg => svg.sources.length > 0);
+  writeFileSync(join(DIST, SVG_STYLE_SRC_FILE), svgs.map(svg => `${[svg.route, ...svg.sources].join(' ')}\n`).join(''));
+  console.log(`style-hashes: ${svgs.length} SVG files with styles in ${SVG_STYLE_SRC_FILE}`);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

@@ -9,6 +9,7 @@ use axum::body::Bytes;
 use axum::http::HeaderValue;
 
 use crate::assets::{Asset, Kind};
+use crate::csp;
 
 mod dist {
     include!(concat!(env!("OUT_DIR"), "/web_dist.rs"));
@@ -16,14 +17,6 @@ mod dist {
 
 /// Vite names the files under this directory after their content.
 const HASHED_DIR: &str = "/assets/";
-
-/// The reading page's Content Security Policy without its style hashes: upstream's strict base
-/// plus `connect-src 'self'` and the images of invariant 17.
-const READING_CSP: [&str; 2] = [
-    "default-src 'none'; script-src 'self'; img-src 'self' https: data:; style-src 'self' data:",
-    "; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; \
-     frame-ancestors 'none'; form-action 'self'",
-];
 
 /// Wraps the plain text of a `<noscript>` copy instead of scrolling sideways.
 const NOSCRIPT_CSS: &str = "pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:1rem}";
@@ -44,29 +37,35 @@ pub(crate) static WEB: LazyLock<Web> = LazyLock::new(|| {
         .iter()
         .map(|(route, content)| {
             let (mime, compressible) = mime_of(route);
-            Asset::at(
+            let asset = Asset::at(
                 (*route).to_owned(),
                 mime,
                 Bytes::from_static(content),
                 compressible,
                 route.starts_with(HASHED_DIR),
-            )
+            );
+            // An SVG file's own `<style>` elements, admitted on its response only.
+            match dist::SVG_STYLE_SRC.iter().find(|(svg, _)| svg == route) {
+                Some((_, sources)) => {
+                    asset.with_policy(csp::widened(&[("style-src", &sources.join(" "))]))
+                }
+                None => asset,
+            }
         })
         .collect();
-    let csp = format!(
-        "{}{}{}",
-        READING_CSP[0],
-        dist::STYLE_SRC
-            .iter()
-            .fold(String::new(), |sources, source| sources + " " + source),
-        READING_CSP[1]
-    );
+    // Upstream's strict base plus the images of invariant 17, `connect-src 'self'` and the styles
+    // the web app inserts at run time.
+    let csp = csp::widened(&[
+        ("img-src", "https:"),
+        ("style-src", &dist::STYLE_SRC.join(" ")),
+        ("connect-src", "'self'"),
+    ]);
 
     Web {
         files,
         noscript_css: Asset::new("noscript", Kind::Css, NOSCRIPT_CSS.as_bytes().to_vec()),
         template: shell::Template::parse(dist::INDEX),
-        csp: HeaderValue::try_from(csp).expect("the policy is ASCII"),
+        csp,
     }
 });
 
