@@ -8,15 +8,19 @@ Zpaste 以 Matthias Vogelgesang 的 [wastebin](https://github.com/matze/wastebin
 
 ## 狀態
 
-Zpaste 仍在早期開發。目前的行為與上游 wastebin 提交 `c0ec968` 相同，差別只有伺服器執行檔名為 `zpaste`，以及日誌行的 target 顯示為 `zpaste`。設定變數仍使用 `WASTEBIN_` 前綴，HTTP API 也與 wastebin 相同。
+Zpaste 仍在早期開發，以上游 wastebin 提交 `c0ec968` 為基礎，目前有三項改動：`/v1` API；由 `web/` 的網頁應用程式在瀏覽器繪製的閱讀頁（`GET /<id>[.<ext>]`，`/md/<id>` 會轉址到這裡）；伺服器執行檔名為 `zpaste`，日誌行的 target 也顯示為 `zpaste`。設定變數仍使用 `WASTEBIN_` 前綴，wastebin 原本的 HTTP API（`POST /`、`/raw`、`/dl`）照常可用。
 
 ## 建置
 
-建置需要 Rust 1.95 以上版本與 C 編譯器，因為 SQLite 與 zstd 會從原始碼編譯。在 repo 根目錄執行：
+建置需要 Rust 1.95 以上版本與 C 編譯器，因為 SQLite 與 zstd 會從原始碼編譯。伺服器在建置時嵌入 `web/` 的網頁應用程式，所以要先建置它，這一步需要 Node.js 22.18 以上版本與 pnpm 11。在 repo 根目錄執行：
 
 ```sh
+pnpm --dir web install --frozen-lockfile
+pnpm --dir web build
 cargo build --release
 ```
+
+沒有 `web/dist` 時，`cargo build` 會發出警告，建置出的伺服器閱讀頁只會提示缺少網頁應用程式；兩種情況下測試都會通過。
 
 伺服器輸出到 `target/release/zpaste`，資料庫工具輸出到 `target/release/wastebin-ctl`。
 
@@ -52,7 +56,7 @@ Dockerfile 會交叉編譯靜態連結 musl 的執行檔，設計為在 x86_64 �
 docker build --target amd64 -t zpaste .
 ```
 
-映像以使用者 10001 執行 `/app/zpaste`。
+映像建置會自行建置網頁應用程式。映像以使用者 10001 執行 `/app/zpaste`。
 
 ## 測試
 

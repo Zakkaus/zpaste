@@ -47,6 +47,17 @@ prerelease and the image tag `0.1.0-beta.1`.
 
 ### Changed
 
+- `GET /<id>[.<ext>]` serves the new reading page: the web app from `web/`,
+  embedded in the executable, with an ordinary paste embedded as JSON, a link
+  preview (title and the first lines) and a `<noscript>` copy of the text. An
+  encrypted or burn-after-reading paste's page carries none of it and is never
+  consumed by opening it. The page's policy admits images from `https:` and
+  `data:`. Building the server from source now starts with `pnpm build` in
+  `web/`; without it the reading page is a placeholder.
+- `/md/<id>` redirects to `/<id>` with 302; the server-rendered Markdown view
+  and its forms are removed.
+- `?owner=` answers a 302 with `no-store`, and drops a token that fails as
+  well. It was a 303.
 - The server executable is named `zpaste`, and log lines name `zpaste` as their
   target. Configuration variables keep the `WASTEBIN_` prefix.
 - HTML pages name Zpaste in `<meta name="generator">`.
