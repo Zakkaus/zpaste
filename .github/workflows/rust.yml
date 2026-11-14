@@ -1,9 +1,19 @@
 name: Rust
 
-on: [push, pull_request]
+# Pull requests run the merge gate; a push to main runs it once more on the
+# merged commit. Pushes to other branches run nothing, so a branch with an open
+# pull request is not checked twice.
+on:
+  pull_request:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -14,9 +24,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout repo
-      uses: actions/checkout@v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@1.95.0
+      uses: dtolnay/rust-toolchain@035fceb3c12fb0c6a9461b52775e16473133e591 # 1.95.0
       with:
         components: clippy,rustfmt
     - run: cargo clippy -- -Dwarnings
@@ -28,15 +38,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Spaces check
-        run: git diff-tree --check $(git hash-object -t tree /dev/null) HEAD
+        run: git diff-tree --check "$(git hash-object -t tree /dev/null)" HEAD
 
   requirements:
     name: Requirements check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: python3 -I scripts/check-requirements.py
       - run: python3 -I scripts/test_check_requirements.py
+
+  version-tag-check:
+    name: Version tag check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: scripts/test_check_version_tag.sh

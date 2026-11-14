@@ -1,0 +1,85 @@
+name: Image
+
+# Builds the Dockerfile's amd64 target. A pull request only builds it, to catch
+# a broken Dockerfile before merge. A push to main also pushes it to
+# ghcr.io/zakkaus/zpaste as main and sha-<short>. Deployments pin the digest
+# printed in the job summary. Version tags are published by release.yml alone.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/zakkaus/zpaste
+
+jobs:
+  image:
+    name: Build image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image tags and labels
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            type=sha,prefix=sha-,format=short
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+          PUSHED: ${{ github.event_name != 'pull_request' }}
+        run: |
+          if [ "$PUSHED" = true ] && [ -z "$DIGEST" ]; then
+            echo "the push reported no digest" >&2
+            exit 1
+          fi
+          {
+            if [ "$PUSHED" = true ]; then
+              echo "Pushed \`$IMAGE@$DIGEST\`"
+              echo
+              echo "Tags:"
+              while IFS= read -r t; do
+                if [ -n "$t" ]; then echo "- \`$t\`"; fi
+              done <<< "$TAGS"
+            else
+              echo "Built \`$IMAGE\` (amd64) for a pull request; nothing was pushed."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
