@@ -127,6 +127,7 @@ Intentional designs that look like defects:
 
 | What | Why | Owner ruling (date, quote) |
 | --- | --- | --- |
+| A wide Markdown table in a paste scrolls horizontally inside its own box at phone width instead of fitting or stacking (`web/AGENTS.md`, "Phone width"). The page itself never scrolls horizontally, the first column stays fixed, and an edge shadow shows that more columns are off screen. | Stacking a data table into one card per row breaks comparison down a column, and the reader does not control the table's width. | 2026-11-14, 「可以。」 on the proposed exception, confirmed as horizontal scrolling (「左右滑動？」) |
 
 ## Not yet enforced
 
