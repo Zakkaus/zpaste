@@ -21,9 +21,15 @@
 // missing one gives way to its alt text. Every page is served with the reading page's Content Security
 // Policy, and only the image meant to be blocked breaks it.
 //
+// With ZPASTE_SERVER=<url> the script checks a running Zpaste server instead, whose shell serves the build
+// embedded in it: it creates the paste and the long paste through `POST /v1/pastes`, checks that their
+// reading pages never scroll sideways from 320 to 1280 px and keep wide tables in their own box, and that
+// the server's own policy (style hashes, no 'unsafe-inline') blocks nothing, the phone outline drawer open.
+//
 //   node scripts/shoot.ts <out-dir> [--ci]  ZPASTE_FIXTURE=<file.md> picks the paste; CHROME=<path> the browser
 //                                           (`bundled`: Playwright's pinned Chromium); ZPASTE_DIST=<dir> another
 //                                           build (default web/dist). --ci leaves out the checks CI does not run.
+//   ZPASTE_SERVER=<url> node scripts/shoot.ts <out-dir>
 //
 // Exit 1 when a check fails, 2 when it cannot run.
 import {createServer, type Server} from 'node:http';
@@ -121,15 +127,19 @@ const STEADY_CONTROLS = `[role="banner"] :is(button, a), [role="group"][aria-lab
  * `<style>` elements Astryx inserts at run time by their hashes, which `pnpm build` writes
  * (scripts/style-hashes.ts); a hash that does not match the inserted text shows as a violation.
  */
-const CSP =
-  "default-src 'none'; script-src 'self'; img-src 'self' https: data:; " +
-  `style-src 'self' data: ${readFileSync(join(DIST, STYLE_SRC_FILE), 'utf8').trim().split('\n').join(' ')}; font-src 'self' data:; ` +
-  "connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; report-uri /csp-report";
+function readingPolicy(): string {
+  return (
+    "default-src 'none'; script-src 'self'; img-src 'self' https: data:; " +
+    `style-src 'self' data: ${readFileSync(join(DIST, STYLE_SRC_FILE), 'utf8').trim().split('\n').join(' ')}; font-src 'self' data:; ` +
+    "connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; report-uri /csp-report"
+  );
+}
 /** What the policy blocked: the page's path and the blocked address. */
 const violations: {page: string; blocked: string}[] = [];
 
 /** Serves `pages[path]` for each page path, PIXEL, the policy's reports and dist/ for the rest. */
 function serve(pages: Record<string, string>): Promise<Server> {
+  const policy = readingPolicy();
   const server = createServer((request, response) => {
     const path = normalize(new URL(request.url ?? '/', 'http://x').pathname);
     if (path === '/csp-report') {
@@ -161,7 +171,7 @@ function serve(pages: Record<string, string>): Promise<Server> {
     }
     const page = pages[path];
     if (page == null) response.writeHead(404).end();
-    else response.writeHead(200, {'content-type': 'text/html; charset=utf-8', 'content-security-policy': CSP}).end(page);
+    else response.writeHead(200, {'content-type': 'text/html; charset=utf-8', 'content-security-policy': policy}).end(page);
   });
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server)));
 }
@@ -1025,6 +1035,46 @@ function checkViolations() {
   console.log(`policy: ${violations.length} violation report(s), ${other.length} unexpected`);
 }
 
+/**
+ * The reading pages of a running server (ZPASTE_SERVER): the fixture and the long paste, created through
+ * the API, at every width, and under the server's own policy with the phone outline drawer open.
+ */
+async function checkServer(browser: Browser, server: string) {
+  const create = async (content: string) => {
+    const response = await fetch(`${server}/v1/pastes`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({paste: {content, extension: 'md'}}),
+    });
+    if (response.status !== 201) throw new Error(`server: creating a paste answered ${response.status}`);
+    const {paste} = (await response.json()) as {paste: {id: string}};
+    return `${server}/${paste.id}.md`;
+  };
+  const pastes = [
+    {name: `server ${fixturePaste().paste.id}`, url: await create(fixturePaste().content)},
+    {name: 'server long', url: await create(longMarkdown())},
+  ];
+  for (const {name, url} of pastes) {
+    await checkWidthsAndTables(browser, url, name);
+    const context = await browser.newContext({viewport: {width: 390, height: 844}});
+    const page = await context.newPage();
+    const blocked: string[] = [];
+    page.on('console', message => {
+      if (message.type() === 'error' && message.text().includes('Content Security Policy')) blocked.push(message.text());
+    });
+    page.on('pageerror', error => failures.push(`${name}: page error: ${error.message}`));
+    const response = await page.goto(url, {waitUntil: 'networkidle'});
+    const policy = response?.headers()['content-security-policy'] ?? '';
+    check(policy.includes("'sha256-") && !policy.includes('unsafe-inline'), `${name}: the page's policy is ${policy}`);
+    check((await page.locator('h1').count()) === 1, `${name}: expected one h1`);
+    await page.getByRole('button', {name: en['outline.open'], exact: true}).click();
+    await page.getByRole('dialog').waitFor();
+    check(blocked.length === 0, `${name}: the policy blocked ${JSON.stringify(blocked)}`);
+    console.log(`${name}: ${url}, ${blocked.length} policy violation(s)`);
+    await context.close();
+  }
+}
+
 async function main() {
   const out = process.argv[2];
   // CI leaves out the first-paint check: it emulates a slow link and processor, takes a minute of the
@@ -1035,6 +1085,19 @@ async function main() {
     process.exit(2);
   }
   mkdirSync(out, {recursive: true});
+  // CHROME=bundled runs the Chromium build pinned by @playwright/test (`playwright install chromium`), as CI does.
+  const chrome = process.env.CHROME ?? '/usr/bin/google-chrome-stable';
+  const target = process.env.ZPASTE_SERVER?.replace(/\/$/, '');
+  if (target) {
+    const browser = await chromium.launch({executablePath: chrome === 'bundled' ? undefined : chrome});
+    try {
+      await checkServer(browser, target);
+    } finally {
+      await browser.close();
+    }
+    for (const failure of failures) console.error(`FAIL ${failure}`);
+    process.exit(failures.length === 0 ? 0 : 1);
+  }
   const shell = readFileSync(join(DIST, 'index.html'), 'utf8');
   const server = await serve({
     '/': withEmbeddedPaste(shell, fixturePaste()),
@@ -1046,8 +1109,6 @@ async function main() {
   });
   const address = server.address();
   const url = typeof address === 'object' && address != null ? `http://127.0.0.1:${address.port}/` : '';
-  // CHROME=bundled runs the Chromium build pinned by @playwright/test (`playwright install chromium`), as CI does.
-  const chrome = process.env.CHROME ?? '/usr/bin/google-chrome-stable';
   const browser = await chromium.launch({executablePath: chrome === 'bundled' ? undefined : chrome});
   try {
     for (const shot of SHOTS) {
