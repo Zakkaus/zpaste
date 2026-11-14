@@ -1,0 +1,68 @@
+// The Zpaste logo, drawn inline so its colours follow the light/dark switch as well as the OS (an <img>
+// sees neither the page's `data-theme` nor its `color-scheme`). The shapes and their placement are
+// src/brand/lockup-light.svg's (Logo.test.tsx keeps them equal); the colours and sizes are
+// src/theme/brand.stylex.ts's. CC BY-SA 2.5, a derivative of the Gentoo logo: see src/brand/NOTICE.md.
+import * as stylex from '@stylexjs/stylex';
+import {brand, brandMedia} from '../theme/brand.stylex';
+
+/** The signet, in its 400-unit artwork square. */
+const SIGNET =
+  'M156.368,15.122c-37.974,4.001 -45.246,8.889 -79.647,34.916c-11.53,8.723 -32.75,29.948 -38.187,55.128c-2.071,9.59 0.377,17.87 7.283,23.676c22.116,18.593 59.131,33.677 89.498,48.259c8.894,4.271 3.005,12.015 -11.338,24.432c-36.194,31.334 -85.128,69.476 -88.544,98.54c-1.61,13.695 3.079,32.305 19.702,41.828c19.419,11.125 59.729,3.864 86.646,-6.159c39.334,-14.647 91.003,-46.973 132.023,-78.748c42.655,-33.043 82.316,-75.011 84.277,-81.856c2.409,-8.406 2.169,-16.169 -2.48,-25.096c-7.301,-14.017 -17.062,-24.432 -27.542,-36.091c-28.122,-29.647 -57.876,-55.697 -93.475,-75.66c-25.707,-14.416 -48.325,-26.319 -78.216,-23.169ZM212.149,81.588c27.434,13.263 55.606,48.102 -0.245,68.154c-15.187,5.453 -63.352,-13.391 -61.878,-39.107c2.15,-37.987 28.625,-45.242 62.123,-29.047l0,0Z M65 270H152V286H65Z M53 302H117V318H53Z';
+/** The 中 and 文 seal strokes, placed on the signet. */
+const SEAL =
+  'M171.5 14.2V66.7 M160 22.2V34.6C160 40.2 161.5 42 166.2 42H176.9C181.7 42 183 40 183 34.6V22.2 M160 30H183 M171 81.6V88.4 M157.2 97.2C160.2 93.9 166 90.7 171.1 88.5C176.8 90.1 182.2 92.8 185.7 96.3 M162.5 93.5C166 95 169.2 97 171.5 99C173.8 101 177.2 105 179.4 110C181.6 115 182.5 124 183.3 131 M179.5 93.1C176.8 94.7 174.3 96.5 171.5 99C168.7 101.5 166.5 105.8 164.7 110C162.9 114.2 160.8 123 160 131';
+/** Each letter of "Zpaste": its offset in the lettering and its outline. */
+const LETTERS: [number, string][] = [
+  [0, 'M0 0H26V4L5 34H26V38H0V34L21 4H0Z'],
+  [34, 'M0 10H4V13C6 10 9 9 12 9C20 9 23 14 23 24C23 34 20 39 12 39C9 39 6 38 4 35V49H0Z M4 24C4 32 6 35 11 35C17 35 19 32 19 24C19 16 17 13 11 13C6 13 4 16 4 24Z'],
+  [65, 'M1 14C4 10 8 9 13 9C20 9 23 13 23 20V38H19V35C16 38 13 39 9 39C3 39 0 35 0 30C0 23 5 20 13 20H19C19 15 17 13 12 13C9 13 6 14 4 17Z M19 24H13C7 24 4 26 4 30C4 33 6 35 10 35C15 35 19 31 19 27Z'],
+  [96, 'M21 12L19 16C16 14 13 13 10 13C6 13 4 15 4 18C4 21 7 22 12 23C19 25 22 27 22 31C22 37 17 39 11 39C7 39 3 38 0 35L2 31C5 34 8 35 11 35C15 35 18 34 18 31C18 29 16 28 10 26C3 24 0 22 0 18C0 12 5 9 10 9C14 9 18 10 21 12Z'],
+  [126, 'M5 2H9V10H18V14H9V30C9 34 10 35 13 35H18V39H13C7 39 5 36 5 30V14H0V10H5Z'],
+  [151, 'M23 25H4C4 32 7 35 12 35C15 35 18 34 20 32L22 35C19 38 16 39 12 39C4 39 0 34 0 24C0 14 4 9 12 9C20 9 23 15 23 23Z M4 21H19C19 16 17 13 12 13C7 13 5 16 4 21Z'],
+];
+
+const styles = stylex.create({
+  lockup: {display: 'inline-flex', flexShrink: 0},
+  mark: {display: 'block', flexShrink: 0, width: brand.markWidth, height: brand.height},
+  wordmark: {
+    display: {default: 'block', [brandMedia.markOnly]: 'none'},
+    flexShrink: 0,
+    width: brand.wordmarkWidth,
+    height: brand.height,
+  },
+  shape: {fill: brand.shape},
+  seal: {stroke: brand.seal},
+});
+
+/**
+ * The signet and the lettering side by side, as the artwork's lockup (64 units high) cropped to its
+ * shapes: two images, so the lettering can give way to the signet alone on the narrowest phones.
+ * Decorative: the link around it carries the name.
+ */
+export function Logo() {
+  return (
+    <span {...stylex.props(styles.lockup)}>
+      <svg viewBox="8.75 5 47.5 50" aria-hidden="true" focusable="false" {...stylex.props(styles.mark)}>
+        <g transform="translate(4 4) scale(.14)">
+          <path fillRule="evenodd" d={SIGNET} {...stylex.props(styles.shape)} />
+          <path
+            d={SEAL}
+            transform="translate(315 162.5) rotate(43) scale(1.2143) translate(-171.5 -14.2)"
+            fill="none"
+            strokeWidth={5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            {...stylex.props(styles.seal)}
+          />
+        </g>
+      </svg>
+      <svg viewBox="56.25 5 157.5 50" aria-hidden="true" focusable="false" {...stylex.props(styles.wordmark)}>
+        <g transform="translate(72 15) scale(.8)" fillRule="evenodd" {...stylex.props(styles.shape)}>
+          {LETTERS.map(([offset, outline]) => (
+            <path key={offset} transform={`translate(${offset} 0)`} d={outline} />
+          ))}
+        </g>
+      </svg>
+    </span>
+  );
+}

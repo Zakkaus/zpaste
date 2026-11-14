@@ -12,7 +12,6 @@ const ROW = '| Type scale (role: size / line height) |';
 
 /** Each role and the first visible element that shows it. A role a paste lacks (no `####`) is skipped. */
 export const TYPE_ROLES: Record<string, string> = {
-  'top-bar name': '[role="banner"] .astryx-top-nav .astryx-text',
   'page title': 'h1',
   // The paste's `#` renders as h2, because the title row holds the h1 (MarkdownView).
   'paste #': '.astryx-markdown h2',

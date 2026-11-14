@@ -98,8 +98,18 @@ The rest of the axes the positioning leaves to decide:
 Approved with the P1 first screen (see [Approval gates](#approval-gates)); each value is a theme token or role.
 
 - **Top bar.** Opaque `--color-background-surface` with a hairline under it. Its
-  content edges are the page frame's: the product name starts where the paste
-  text starts, at every width.
+  content edges are the page frame's: the logo starts where the paste text
+  starts, at every width.
+- **Logo.** The signet and the "Zpaste" lettering (`web/src/brand/`, concept A,
+  chosen by the owner on 2026-11-15) stand in for the product name, as a link to
+  `/` named "Zpaste". It is 40 px high, gentoozh.org's top-bar logo height, with
+  the signet nearly filling it as gentoozh.org's does: 164 × 40 px, and the
+  signet alone (38 × 40 px) below 360 px, so the top-bar buttons keep a clear gap.
+  It is drawn inline in the artwork's colours, `#514776` on a light page and
+  `#C4BEDB` on a dark one (`web/src/theme/brand.stylex.ts`), so it follows the
+  theme switch as well as the OS. The browser tab shows `favicon.svg`, which
+  switches the same colours with the OS; `favicon-32.png` and
+  `apple-touch-icon.png` (on white) cover browsers without SVG icons.
 - **Title row.** The page's h1 takes the heading-2 role, one step above the body
   and one below the paste's own first heading, which carries the page. Details
   take the supporting role in `--color-text-secondary`. Copy is the view's one
@@ -150,7 +160,6 @@ zh-TW doc pages (a post and the binary package setup page) on 2026-11-15.
 
 | Role | Token | Zpaste (px, size / line height) | gentoozh.org doc page |
 | --- | --- | --- | --- |
-| Top-bar name | `large`, semibold | 17 / 24 | the logo image |
 | Page title (`h1`) | `heading-2` | 20 / 28 | `display-1`, 42 / 52 (29 / 36 below 640 px) |
 | Paste `#` | `heading-1` | 24 / 32 | none: the title comes from front matter |
 | Paste `##` | `heading-2` | 20 / 28 | `display-3`, 29 / 36 |
