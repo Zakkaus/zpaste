@@ -321,8 +321,11 @@ identity's gives one 400, so it reveals nothing about the id.
 
 ## Revisions
 
-Target: the `revisions` table arrives in P1, so the `version_id` and `ETag` of a
-create response are real from the first day; edits open in P2.
+Current: the `revisions` table exists (migration 8). Every create writes
+version 1 in the same transaction as the paste, and the migration wrote version 1
+for every older paste, so the `version_id` and `ETag` of a create response will
+be real from the first day. Target, P1: the `/v1` responses carry them. Target,
+P2: edits.
 
 A version id is a hash chain, as in git:
 
@@ -367,8 +370,9 @@ flowchart TD
 - History is linear: any conflict is 412. Whether branches are ever allowed is
   left to a later decision by Zephyr (open).
 - History stores the bytes as stored, ciphertext and nonce included. It is
-  deleted with the paste. History endpoints check existence and expiry before
-  permission.
+  deleted with the paste: a trigger on `entries` removes the revisions on every
+  delete, burn and purge included (current). History endpoints check existence
+  and expiry before permission.
 - One paste's total history is capped at a multiple of
   `WASTEBIN_MAX_BODY_SIZE`. The multiple is open.
 - The migration backfills a first version for every existing paste from its
@@ -425,21 +429,35 @@ and the web app replace them.
 ## Storage and migrations
 
 Current: SQLite through rusqlite. Migrations are embedded SQL files applied by
-rusqlite_migration at start-up; there are seven, the last adding the title
-column. Content is zstd-compressed. An encrypted paste is sealed with
-XChaCha20-Poly1305 under a key derived by Argon2i from the password and
-`WASTEBIN_PASSWORD_SALT`.
+rusqlite_migration at start-up; there are eight, the last adding the
+`revisions` table and the `extension` and `created_at` columns. Content is
+zstd-compressed. An encrypted paste is sealed with XChaCha20-Poly1305 under a
+key derived by Argon2i from the password and `WASTEBIN_PASSWORD_SALT`.
 
 Target migrations:
 
 | Phase | Change |
 | --- | --- |
-| P1 | `extension` column (set at creation, never changed; empty for old pastes); `created_at` column (empty for old pastes); `revisions` table with the backfill described above. |
 | P2b | `workspaces` and `entries` tables. |
 
-The P1 migration is first verified on a copy of the live database. An older
-executable refuses a migrated database (`DatabaseTooFarAhead`), so a rollback
-past a migration restores the backup; see [workflow.md](workflow.md).
+Migration 8 (P1) adds the `extension` column (set at creation, never changed;
+empty for old pastes), the `created_at` column (empty for old pastes) and the
+`revisions` table with the backfill described above. Revision 1 copies every
+paste's stored bytes, so `state.db` roughly doubles, and the entry row keeps
+its own copy until P2 may store the current content only once. The migration
+runs in one transaction: if the volume is full it fails with `SQLITE_FULL`,
+rolls back, and `user_version` stays 7; rerun it after freeing space.
+
+It was verified on a copy of the live database on 2026-11-15: 867 entries (19
+encrypted, 2 burn-after-reading, 268 expired) gained 867 revisions, with 0
+mismatches against version ids computed by an independent Python hasher;
+`PRAGMA integrity_check` answered `ok`, `user_version` read 8, and `/raw`
+returned a sha256 identical to the old build's for all 590 readable ids. The
+file grew from 7,368,704 to 14,782,464 bytes; the migration took 0.156 s on a
+debug build, process start included.
+
+An older executable refuses a migrated database (`DatabaseTooFarAhead`), so a
+rollback past a migration restores the backup; see [workflow.md](workflow.md).
 
 ## Reliability
 

@@ -126,7 +126,11 @@ Before the release:
    `ghcr.io/zakkaus/zpaste`; note its digest.
 2. The migration and the full test suite have passed on a copy of the live
    database.
-3. The signing key and salt are read from the current `.env` (root 600, with
+3. The volume holding `state.db` has free space of at least the current size of
+   `state.db`: migration 8 copies every paste's stored bytes into revision 1,
+   so the file roughly doubles. Without the space the migration fails with
+   `SQLITE_FULL`, rolls back and leaves `user_version` at 7.
+4. The signing key and salt are read from the current `.env` (root 600, with
    `sudo`) and written to `/etc/zpaste/env` unchanged. If no salt was set, the
    upstream default `somesalt` is what the old service used, and it stays.
 
@@ -135,7 +139,10 @@ Release steps:
 1. Stop every write on the old service, including burn-after-reading reads,
    which delete data. Back up `/opt/wastebin/data/state.db`.
 2. Copy the database to `/var/lib/zpaste/`, keeping uid 10001. Run the
-   migration and the full test suite on a second copy.
+   migration and the full test suite on a second copy. Check first that the
+   volume has free space of at least the current size of `state.db`; the
+   migration roughly doubles the file, and a full disk makes it roll back
+   (rerun after freeing space).
 3. Start the new image's digest from `/opt/zpaste/compose.yml`, with the same
    signing key, salt, Traefik labels and rate limit.
 4. Spot-check: an old paste, an encrypted paste, deleting as owner, creating
