@@ -28,19 +28,24 @@ WORKDIR /app
 COPY . .
 
 RUN cargo zigbuild \
+    --locked \
     --release \
     --target aarch64-unknown-linux-musl \
     --target x86_64-unknown-linux-musl \
     --bin zpaste \
     --bin wastebin-ctl
 
-RUN adduser \
+# uid and gid 10001 match the live compose file (user: "10001:10001"), which
+# owns the data volume.
+RUN addgroup --gid "10001" "app" && \
+    adduser \
     --disabled-password \
     --gecos "" \
     --home "/nonexistent" \
     --shell "/sbin/nologin" \
     --no-create-home \
     --uid "10001" \
+    --gid "10001" \
     "app"
 
 
@@ -54,7 +59,7 @@ COPY --from=builder /etc/group /etc/group
 WORKDIR /app
 COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/zpaste ./
 COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/wastebin-ctl ./
-USER app:app
+USER 10001:10001
 CMD ["/app/zpaste"]
 
 # --- aarch64-unknown-linux-musl final image
@@ -67,5 +72,5 @@ COPY --from=builder /etc/group /etc/group
 WORKDIR /app
 COPY --from=builder /app/target/aarch64-unknown-linux-musl/release/zpaste ./
 COPY --from=builder /app/target/aarch64-unknown-linux-musl/release/wastebin-ctl ./
-USER app:app
+USER 10001:10001
 CMD ["/app/zpaste"]
