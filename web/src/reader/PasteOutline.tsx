@@ -97,7 +97,10 @@ function scrollerOf(element: HTMLElement): HTMLElement | null {
   return null;
 }
 
-/** The top-bar button and the Drawer it opens; shown below `media.narrow` only. */
+/**
+ * The top-bar button and the Drawer it opens; shown below `media.narrow` only. The button is an icon
+ * button like the theme switch beside it, as gentoozh.org's phone top bar draws its menu button.
+ */
 export function OutlineDrawer({items}: {items: OutlineItem[]}) {
   const [isOpen, setOpen] = useState(false);
   const target = useRef<string | null>(null);
@@ -124,7 +127,9 @@ export function OutlineDrawer({items}: {items: OutlineItem[]}) {
       <Button
         variant="ghost"
         size={BUTTON.toolbar}
+        isIconOnly
         label={t('outline.open')}
+        tooltip={t('outline.open')}
         icon={<Icon icon="menu" />}
         aria-haspopup="dialog"
         onClick={() => setOpen(true)}

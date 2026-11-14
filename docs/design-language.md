@@ -111,6 +111,10 @@ Proposed for the owner's approval with the P1 first screen; each value is a them
   phone the buttons take their own row.
 - **Theme switch.** At the end of the top bar, before the phone outline button
   (see the Theme row above).
+- **Top-bar buttons.** The theme switch and the phone outline button are ghost
+  icon buttons of one size (44 px square on a phone, 32 px from 1024 px up) with
+  one icon size, each named by its label and tooltip, as gentoozh.org's phone
+  top bar draws its theme, language and menu buttons.
 - **Headings in the paste.** The paste's `#` renders as h2, because the title
   row holds the h1, but keeps the look of the level the author wrote: h2 takes
   the heading-1 role, h3 heading-2, and so on.
@@ -164,32 +168,44 @@ zh-TW doc pages (a post and the binary package setup page) on 2026-11-15.
 
 Three roles differ from the site on purpose. The page title steps down for the
 paste's own first heading (see the title row above). Table cells take the label
-role because tables are data (see Tables above). The paste's `##` is open (D10):
-a post on the site has its title above it in `display-1`, so the site sets its
-`##` in `display-3`; Zpaste keeps Astryx's level-to-role order, because a
-paste's own `#` is its title.
+role because tables are data (see Tables above). The paste's `##` keeps
+Astryx's level-to-role order, `heading-2` (20 px) under `#` in `heading-1`
+(24 px), not the site's display sizes: a post on the site has its title above
+it in `display-1`, so the site sets its `##` in `display-3`, while a paste's own
+`#` is its title (D10, settled).
 
 ### Chinese text
 
-Measured with `web/fixtures/chinese.md`, a synthetic paste with one Traditional
-(Taiwan) half and one Simplified (mainland) half.
+Measured with `web/fixtures/chinese-hant.md` and `web/fixtures/chinese-hans.md`,
+one synthetic note written in Traditional (Taiwan) and in Simplified (mainland)
+Chinese.
 
 - **Font.** Figtree sets Latin; Chinese falls back through the theme's list,
   which names PingFang, Noto Sans CJK and Microsoft YaHei and JhengHei, the same
   list gentoozh.org uses on its English pages. Every weight in use is a real
   face (Noto Sans CJK Regular, Medium for the table header, Bold for the
   semibold headings); Chrome synthesizes no bold.
-- **Glyph forms.** The list names the Simplified faces first, so a Traditional
-  paste is drawn with mainland glyph forms and its `，` and `。` sit at the
-  bottom left rather than centred. gentoozh.org orders the faces by the page's
-  locale (`SiteShell`); Zpaste has no locale yet (D6), so this is open (D11).
+- **Glyph forms.** The theme's list names the Simplified faces first, which
+  would draw a Traditional paste with mainland glyph forms, its `，` and `。` at
+  the bottom left rather than centred. The forms follow the paste's own text,
+  not the interface locale (D11): `web/src/reader/pasteLanguage.ts` counts, in
+  the first 20,000 characters, the characters that exist in only one script
+  (313 frequent pairs such as 這/这 and 會/会) and marks the paste's text, not the
+  chrome, `lang="zh-Hant"` or `lang="zh-Hans"` by the larger count. It sets no
+  language when the counts are even, when there is no Chinese, when Latin
+  letters outnumber Han characters twenty to one (an English paste quoting a
+  Chinese word) or when kana stand beside the kanji (Japanese).
+  `PasteContent.module.css` gives each language the theme's faces of its
+  script first, in the order gentoozh.org's `SiteShell` uses for its zh-CN and
+  zh-TW pages. Chrome then draws the Traditional fixture with Noto Sans CJK TC
+  and the Simplified one with Noto Sans CJK SC.
 - **Line height.** The body's 1.6471 (28 px at 17 px) is the site's, below the
-  1.7 usually given for Chinese body text. A change belongs in the theme
-  package, for both (D12).
+  1.7 usually given for Chinese body text. It stays the site's (D12, settled);
+  a change belongs in the theme package, so the site changes with it.
 - **Line length.** 44 Chinese characters per line at 1280 px (a 752 px column
-  at 17 px) and 20 at 390 px, the same as the site's doc column. The comfortable
-  range is about 30 to 40; narrowing the column is a change to the shared width
-  (D12).
+  at 17 px) and 20 at 390 px, the same as the site's doc column. The usual
+  comfortable range is about 30 to 40; the column stays the site's (D12,
+  settled), and narrowing it is a change to the shared width.
 - **Line breaks.** No line starts with closing punctuation and no paragraph
   overflows its column, at 390 and 1280 px.
 - **Code.** The code faces have no Chinese glyphs; a Chinese comment falls back
@@ -325,6 +341,11 @@ tables, side-by-side diffs, splitting multi-file pastes.
 | D7 | Recording Markdown tables on phones as an exception to `web/AGENTS.md`, "Phone width", in `REQUIREMENTS.md`, "Exceptions". | P1 |
 | D8 | Layout library for the mind map: markmap or `d3-flextree`. | P1b |
 | D9 | What the edit page offers after a 412: reload, show a diff, or overwrite. gzpaste's behaviour is decided (plan section 五); the page's is not. | P2 |
-| D10 | The paste's heading roles: Astryx's order (`##` in `heading-2`, 20 px) or the site's (`##` in `display-3`, 29 px, with `#` above it). See [Type scale](#type-scale). | P1 first screen |
-| D11 | Chinese glyph forms: order the Simplified and Traditional faces by the interface locale, as gentoozh.org does, or by the paste's own language. | D6 |
-| D12 | Chinese line height (1.7 or more) and line length (30 to 40 characters): both are shared with gentoozh.org, so a change goes to the theme package and the site's column width. | P1 first screen |
+
+## Settled items
+
+| # | Item | Ruling |
+| --- | --- | --- |
+| D10 | The paste's heading roles. | Astryx's order: `#` in `heading-1` (24 px), `##` in `heading-2` (20 px), not the site's display sizes. Owner, 2026-11-15: 「可以」 to this recommendation. See [Type scale](#type-scale). |
+| D11 | Chinese glyph forms. | By the paste's own text, detected on the paste's text only, not by the interface locale. Technical decision, 2026-11-15. See [Chinese text](#chinese-text). |
+| D12 | Chinese line height and line length. | Identical to gentoozh.org: 17 / 28 px and about 44 Chinese characters per line at 1280 px. A change belongs in the shared theme package, so the site changes too. Owner, 2026-11-15: 「可以」 to this recommendation. See [Chinese text](#chinese-text). |

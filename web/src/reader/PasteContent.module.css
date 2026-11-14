@@ -1,0 +1,27 @@
+/*
+ * The paste's text, marked with its own language (pasteLanguage.ts). The theme's font list names the
+ * Simplified Chinese faces before the Traditional ones, so without these rules Traditional text takes
+ * mainland glyph forms, with `，` and `。` in the bottom left instead of centred. Each script gets its
+ * own faces first, in the order gentoozh.org's SiteShell uses for its zh-CN and zh-TW pages; the
+ * families are the theme's (FONT_FALLBACKS), only reordered. Code keeps the code face, whose missing
+ * Chinese glyphs fall back by the same language.
+ */
+.content {
+  display: contents;
+}
+
+.content:lang(zh-Hant) {
+  --font-family-body: var(--font-figtree, Figtree), "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei",
+    "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, Helvetica, Arial, sans-serif;
+  --font-family-heading: var(--font-family-body);
+  font-family: var(--font-family-body);
+}
+
+.content:lang(zh-Hans) {
+  --font-family-body: var(--font-figtree, Figtree), "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei",
+    "PingFang TC", "Noto Sans CJK TC", "Microsoft JhengHei", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, Helvetica, Arial, sans-serif;
+  --font-family-heading: var(--font-family-body);
+  font-family: var(--font-family-body);
+}

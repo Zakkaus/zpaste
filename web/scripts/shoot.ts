@@ -9,7 +9,10 @@
 // changes the theme, survives a reload without a frame of the other theme and follows the OS while no
 // choice is stored. From tablet width up a table of up to three columns fits its box. Every role of
 // the type scale renders the size and line height REQUIREMENTS.md records for it (typeScale.ts), at
-// 390 and 1280 px, in the paste and in the committed Chinese fixture, which has every role.
+// 390 and 1280 px, in the paste and in the committed Chinese fixtures, which have every role. The
+// Traditional fixture is marked zh-Hant and drawn with a Traditional Chinese face, the Simplified one
+// zh-Hans with a Simplified face, and an English paste keeps the page's language. The top bar's buttons
+// share one size and icon size.
 //
 //   node scripts/shoot.ts <out-dir>        ZPASTE_FIXTURE=<file.md> picks the paste; CHROME=<path> the browser;
 //                                          ZPASTE_DIST=<dir> another build (default web/dist).
@@ -46,10 +49,15 @@ const FIT_WIDTHS = [768, 1010, 1280];
 const FIT_COLUMNS = 3;
 /** Where the generated long paste is served. */
 const LONG_PATH = '/long';
-/** Where the committed Chinese fixture is served: Traditional and Simplified prose, a table and commented code. */
-const CHINESE_PATH = '/zh';
-const CHINESE_FIXTURE = join(dirname(DEFAULT_FIXTURE), 'chinese.md');
-/** Shots of the Chinese fixture, also used for its type-scale check. */
+/**
+ * The committed Chinese fixtures, one note in each script with prose, a table and commented code, each
+ * served at `/<name>`: the language pasteLanguage.ts gives it and the Chinese face it must be drawn with.
+ */
+const CHINESE = [
+  {name: 'zh-hant', file: 'chinese-hant.md', lang: 'zh-Hant', face: /\bTC\b|JhengHei/},
+  {name: 'zh-hans', file: 'chinese-hans.md', lang: 'zh-Hans', face: /\bSC\b|YaHei/},
+] as const;
+/** Shots of the Chinese fixtures, also used for their type-scale check. */
 const TYPE_SHOTS = [
   {width: 1280, height: 800, scheme: 'light'},
   {width: 390, height: 844, scheme: 'dark'},
@@ -58,6 +66,10 @@ const TYPE_SHOTS = [
 const LEADING_TOLERANCE = 0.05;
 const OUTLINE = `nav[aria-label="${en['outline.label']}"]`;
 const COPY = `[role="group"][aria-label="${en['action.actions']}"] button`;
+/** The paste's text, marked with its own language (ReaderPage). */
+const CONTENT = 'div:has(> .astryx-markdown, > .astryx-code-block)';
+/** Heights of the header shots: the top bar, the title row and the paste's first heading. */
+const HEADER_HEIGHT = {wide: 256, narrow: 380};
 
 /** Serves `pages[path]` for each page path (`/` and LONG_PATH) and dist/ for the rest. */
 function serve(pages: Record<string, string>): Promise<Server> {
@@ -468,6 +480,74 @@ async function checkActions(page: Page, name: string, wide: boolean) {
 }
 
 /**
+ * The top bar's controls are one set, as on gentoozh.org: icon buttons of one width, height and icon
+ * size, and at phone width at least the theme's 44 px touch height.
+ */
+async function checkTopBar(page: Page, name: string, wide: boolean) {
+  const buttons = await page.locator('[role="banner"] button').evaluateAll(elements =>
+    elements
+      .filter(element => element.checkVisibility())
+      .map(element => {
+        const box = element.getBoundingClientRect();
+        const icon = element.querySelector('svg')?.getBoundingClientRect();
+        return {
+          name: element.getAttribute('aria-label') ?? element.textContent ?? '',
+          size: `${Math.round(box.width)}x${Math.round(box.height)}`,
+          height: Math.round(box.height),
+          icon: icon == null ? 'none' : `${Math.round(icon.width)}x${Math.round(icon.height)}`,
+          text: element.textContent?.trim() ?? '',
+        };
+      }),
+  );
+  const describe = JSON.stringify(buttons.map(button => [button.name, button.size, button.icon]));
+  check(buttons.length >= (wide ? 1 : 2), `${name}: the top bar shows ${buttons.length} buttons`);
+  check(new Set(buttons.map(button => button.size)).size === 1, `${name}: the top-bar buttons differ in size ${describe}`);
+  check(new Set(buttons.map(button => button.icon)).size === 1, `${name}: the top-bar icons differ in size ${describe}`);
+  check(buttons.every(button => button.text === ''), `${name}: a top-bar button shows a text label ${describe}`);
+  if (!wide) check(buttons.every(button => button.height >= 44), `${name}: a top-bar button is under 44 px high ${describe}`);
+  console.log(`${name}: top bar ${describe}`);
+}
+
+/**
+ * A Chinese fixture is marked with its script's language on the paste's text only, and Chrome draws its
+ * Chinese with a face of that script (CSS.getPlatformFontsForNode on the first paragraph). Returns the
+ * face, so the caller can check that the two scripts get different faces.
+ */
+async function checkChineseFace(browser: Browser, url: string, fixture: (typeof CHINESE)[number]): Promise<string> {
+  const context = await browser.newContext({viewport: {width: 1280, height: 800}, deviceScaleFactor: 1});
+  const page = await context.newPage();
+  await page.goto(url, {waitUntil: 'networkidle'});
+  await page.evaluate(() => document.fonts.ready);
+  const langs = await page.evaluate(selector => ({page: document.documentElement.lang, content: document.querySelector(selector)?.getAttribute('lang') ?? null, marked: document.querySelectorAll('[lang]').length}), CONTENT);
+  check(langs.content === fixture.lang, `${fixture.name}: the paste's text is marked ${langs.content}, expected ${fixture.lang}`);
+  // Only <html> and the paste's text carry a language: the chrome keeps the page's.
+  check(langs.marked === 2, `${fixture.name}: ${langs.marked} elements carry lang, expected <html> and the paste's text`);
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('DOM.enable');
+  await cdp.send('CSS.enable');
+  const {root} = await cdp.send('DOM.getDocument', {depth: -1});
+  const {nodeId} = await cdp.send('DOM.querySelector', {nodeId: root.nodeId, selector: `${CONTENT} .astryx-markdown-paragraph`});
+  const {fonts} = await cdp.send('CSS.getPlatformFontsForNode', {nodeId});
+  // The face that draws most glyphs other than the Latin one.
+  const chinese = fonts.filter(font => !/figtree/i.test(font.familyName)).sort((a, b) => b.glyphCount - a.glyphCount)[0];
+  const face = chinese == null ? 'none' : `${chinese.familyName} (${chinese.postScriptName})`;
+  check(chinese != null && fixture.face.test(chinese.familyName), `${fixture.name}: Chinese is drawn with ${face}, expected a face matching ${fixture.face}`);
+  console.log(`${fixture.name}: lang ${langs.content}; faces ${fonts.map(font => `${font.familyName} ${font.glyphCount}`).join(', ')}`);
+  await context.close();
+  return face;
+}
+
+/** An English paste carries no language of its own: it keeps the page's. */
+async function checkNoLanguage(browser: Browser, url: string, name: string) {
+  const context = await browser.newContext({viewport: {width: 1280, height: 800}});
+  const page = await context.newPage();
+  await page.goto(url, {waitUntil: 'networkidle'});
+  const lang = await page.evaluate(selector => document.querySelector(selector)?.getAttribute('lang') ?? null, CONTENT);
+  check(lang == null, `${name}: the paste's text is marked ${lang}, expected the page's language`);
+  await context.close();
+}
+
+/**
  * Each role of the type scale renders the size and line height REQUIREMENTS.md records, at 1280 px and
  * 390 px. A role measures its first visible element; on a phone the outline is measured in the open
  * drawer, and the rail's label does not show. `complete` (the Chinese fixture) requires every other
@@ -648,7 +728,7 @@ async function main() {
   const server = await serve({
     '/': withEmbeddedPaste(shell, fixturePaste()),
     [LONG_PATH]: withEmbeddedPaste(shell, embeddedPaste('long', 'md', longMarkdown())),
-    [CHINESE_PATH]: withEmbeddedPaste(shell, fixturePaste(CHINESE_FIXTURE)),
+    ...Object.fromEntries(CHINESE.map(fixture => [`/${fixture.name}`, withEmbeddedPaste(shell, fixturePaste(join(dirname(DEFAULT_FIXTURE), fixture.file)))])),
   });
   const address = server.address();
   const url = typeof address === 'object' && address != null ? `http://127.0.0.1:${address.port}/` : '';
@@ -663,6 +743,9 @@ async function main() {
       check((await page.locator('h1').count()) === 1, `${shot.name}: expected one h1`);
       await checkOutlineTracking(page, shot.name);
       await page.screenshot({path: join(out, `${shot.name}.png`)});
+      const wide = shot.width >= 1024;
+      await page.screenshot({path: join(out, `${shot.name}-header.png`), clip: {x: 0, y: 0, width: shot.width, height: wide ? HEADER_HEIGHT.wide : HEADER_HEIGHT.narrow}});
+      await checkTopBar(page, shot.name, wide);
 
       const table = page.locator('.astryx-markdown table').first();
       if ((await table.count()) > 0) {
@@ -678,7 +761,7 @@ async function main() {
         await page.waitForTimeout(400);
         await page.screenshot({path: join(out, `${shot.name}-code.png`)});
       }
-      if (shot.width >= 1024) {
+      if (wide) {
         // A click on a rail entry: once the smooth scroll ends, its section is on screen and current.
         const entry = await outlineEntry(page, 3);
         await page.locator(`aside ${OUTLINE} a`).nth(3).click();
@@ -715,12 +798,18 @@ async function main() {
         await checkCurrent(page, `${shot.name} after clicking the drawer entry #${target}`, target);
         await page.screenshot({path: join(out, `${shot.name}-outline-jump.png`)});
       }
-      await checkActions(page, shot.name, shot.width >= 1024);
+      await checkActions(page, shot.name, wide);
       await context.close();
     }
 
     await checkTypeScale(browser, url, fixturePaste().paste.id, false);
-    await checkTypeScale(browser, `${url.slice(0, -1)}${CHINESE_PATH}`, 'zh', true, out);
+    const faces: string[] = [];
+    for (const fixture of CHINESE) {
+      await checkTypeScale(browser, `${url}${fixture.name}`, fixture.name, true, out);
+      faces.push(await checkChineseFace(browser, `${url}${fixture.name}`, fixture));
+    }
+    check(new Set(faces).size === faces.length, `the Chinese fixtures share the face ${faces.join(' / ')}`);
+    if (process.env.ZPASTE_FIXTURE == null) await checkNoLanguage(browser, url, fixturePaste().paste.id);
     await checkTheme(browser, url, out);
     await checkWidthsAndTables(browser, url, fixturePaste().paste.id);
     const long = `${url.slice(0, -1)}${LONG_PATH}`;

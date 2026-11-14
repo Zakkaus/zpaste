@@ -16,6 +16,8 @@ import {isMarkdown, pasteExtension} from './languages';
 import {outlineItems} from './markdownPlugins';
 import {MarkdownView} from './MarkdownView';
 import {OutlineDrawer, OutlineRail} from './PasteOutline';
+import css from './PasteContent.module.css';
+import {pasteLanguage} from './pasteLanguage';
 import {PasteHeader} from './PasteHeader';
 
 const styles = stylex.create({
@@ -38,6 +40,8 @@ export function ReaderPage({data}: {data: EmbeddedPaste}) {
   const markdown = isMarkdown(extension);
   const outline = useMemo(() => (markdown ? outlineItems(data.content) : []), [markdown, data.content]);
   const hasOutline = outline.length > 0;
+  // The paste's own language, on its text only: the chrome stays in the interface language.
+  const language = useMemo(() => pasteLanguage(data.content), [data.content]);
 
   return (
     <AppShell
@@ -68,11 +72,13 @@ export function ReaderPage({data}: {data: EmbeddedPaste}) {
               <PasteHeader data={data} extension={extension} />
               <Divider />
             </VStack>
-            {markdown ? (
-              <MarkdownView source={data.content} />
-            ) : (
-              <CodeBlock code={data.content} language="plaintext" width="100%" hasLineNumbers />
-            )}
+            <div lang={language} className={css.content}>
+              {markdown ? (
+                <MarkdownView source={data.content} />
+              ) : (
+                <CodeBlock code={data.content} language="plaintext" width="100%" hasLineNumbers />
+              )}
+            </div>
           </VStack>
         </Section>
         {hasOutline ? <OutlineRail items={outline} /> : null}
