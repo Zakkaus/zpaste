@@ -323,3 +323,44 @@ async fn legacy_routes_answer_the_client_rate_with_its_retry_after() {
         assert!((29..=30).contains(&retry_after), "{retry_after}");
     }
 }
+
+#[tokio::test]
+async fn html_password_on_a_plain_paste_spends_no_derivation() {
+    // Two tokens: the encrypted create spends one, the first encrypted read the other.
+    let client = Client::with_settings(
+        StoreCookies(false),
+        Settings {
+            rate: RateLimit::per_minute(NonZeroU32::new(2).expect("non-zero")),
+            ..Settings::default()
+        },
+    )
+    .await;
+    let plain = Paste {
+        text: "plain",
+        password: None,
+        burn: false,
+    };
+    let plain = create_with(&client, Create::Legacy, &plain).await;
+    let locked = Paste {
+        text: "locked",
+        password: Some("pw"),
+        burn: false,
+    };
+    let locked = create_with(&client, Create::Legacy, &locked).await;
+
+    let post = |path: String, password: &'static str| {
+        client.post(&path).form(&[("password", password)]).send()
+    };
+    for path in [format!("/{plain}"), format!("/md/{plain}")] {
+        for _ in 0..2 {
+            let res = post(path.clone(), "x").await.expect("plain");
+            assert_eq!(res.status(), StatusCode::OK, "{path}");
+        }
+    }
+
+    // The plain reads left the token, and an encrypted read still spends it.
+    let res = post(format!("/{locked}"), "pw").await.expect("locked");
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = post(format!("/md/{locked}"), "pw").await.expect("locked");
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+}

@@ -286,6 +286,8 @@ pub mod read {
         pub expiration: Option<Expiration>,
         /// Entry will be deleted the next time it is fetched via [`Database::get`].
         pub must_be_deleted: bool,
+        /// Whether the content is encrypted, so reading it derives a key.
+        pub encrypted: bool,
     }
 
     /// Potentially deleted or non-existent expired entry.
@@ -570,7 +572,7 @@ impl Handler {
 
     fn get_metadata(&self, id: Id) -> Result<Metadata, Error> {
         let metadata = self.conn.query_row(
-            "SELECT uid, title, CAST(ROUND((julianday(expires) - julianday('now')) * 86400) AS INTEGER), burn_after_reading FROM entries WHERE id=?1",
+            "SELECT uid, title, CAST(ROUND((julianday(expires) - julianday('now')) * 86400) AS INTEGER), burn_after_reading, nonce IS NOT NULL FROM entries WHERE id=?1",
             params![id.to_i64()],
             |row| {
                 let expiration = row.get::<_, Option<i64>>(2)?
@@ -583,6 +585,7 @@ impl Handler {
                     title: row.get::<_, Option<String>>(1)?,
                     expiration,
                     must_be_deleted: row.get::<_, Option<bool>>(3)?.unwrap_or(false),
+                    encrypted: row.get(4)?,
                 })
             }
         )?;

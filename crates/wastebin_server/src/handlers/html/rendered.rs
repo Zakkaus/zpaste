@@ -72,8 +72,8 @@ pub async fn get<E>(
             .into_response());
         }
 
-        // Only an encrypted paste takes a password, so a password means a derivation.
-        if password.is_some() {
+        // A password derives a key only for an encrypted paste; a plain one ignores it.
+        if password.is_some() && metadata.encrypted {
             service::admit(&rate, client)?;
         }
 
