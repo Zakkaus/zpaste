@@ -193,7 +193,8 @@ static files:
 1. Open Graph tags (title, type, the first lines) so a Telegram preview shows
    what the paste is.
 2. For an ordinary paste, the content and its `ETag` as embedded JSON, so the
-   app does not fetch it a second time.
+   app does not fetch it a second time. The shape and the escaping are defined
+   once, in `web/src/shell/embedded.ts`; the shell writes exactly that.
 3. A `<noscript>` block with the plain text, so a reader without JavaScript can
    still read an ordinary paste.
 4. The `?owner=` exchange (invariant 16), done before any HTML. Upstream

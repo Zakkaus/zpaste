@@ -1,0 +1,55 @@
+// The contract between the server's HTML shell and the app: for an ordinary paste the shell embeds
+// the paste in the page, so the app renders it without a second request (docs/architecture.md,
+// "Serving a page"). The Rust shell must write exactly this shape and escaping; the dev server and
+// the screenshot script write it with `serializeEmbeddedPaste` below.
+
+/** The id of the `<script type="application/json">` element that carries the paste. */
+export const EMBEDDED_PASTE_ID = 'zpaste-paste';
+
+/** The paste resource, with the field names of `GET /v1/pastes/{id}`. */
+export interface PasteMeta {
+  /** 6 or 11 characters, without the extension. */
+  id: string;
+  /** The extension stored at creation, such as `md` or `rs`; null for none. */
+  extension: string | null;
+  title: string | null;
+  encrypted: boolean;
+  burn_after_reading: boolean;
+  /** RFC 3339, UTC; null for a paste created before the column existed. */
+  created_at: string | null;
+  /** RFC 3339, UTC; null for a paste that never expires. */
+  expires_at: string | null;
+  version: number;
+  version_id: string;
+}
+
+/** What the shell embeds for an ordinary paste. Encrypted and burn-after-reading pastes are never embedded. */
+export interface EmbeddedPaste {
+  paste: PasteMeta;
+  /** The paste text, UTF-8. */
+  content: string;
+  /** The `ETag` the content was served with. */
+  etag: string;
+  /** The extension in the reading URL (`/<id>.<ext>`), which picks the renderer before the stored one; null for none. */
+  url_extension: string | null;
+}
+
+/**
+ * JSON safe to place between `<script type="application/json">` and `</script>`: `<`, `>` and `&` become
+ * `\u003c`, `\u003e` and `\u0026`, so content holding `</script>` or `<!--` cannot end or alter the
+ * element, and U+2028 and U+2029 are escaped as well. JSON.parse reads the result back unchanged.
+ */
+export function serializeEmbeddedPaste(data: EmbeddedPaste): string {
+  return JSON.stringify(data).replace(/[<>&\u2028\u2029]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
+/** The element the shell writes, ready to insert into the page. */
+export function embeddedPasteElement(data: EmbeddedPaste): string {
+  return `<script type="application/json" id="${EMBEDDED_PASTE_ID}">${serializeEmbeddedPaste(data)}</script>`;
+}
+
+/** The embedded paste, or null when the page carries none. */
+export function readEmbeddedPaste(doc: Document): EmbeddedPaste | null {
+  const text = doc.getElementById(EMBEDDED_PASTE_ID)?.textContent;
+  return text == null || text === '' ? null : (JSON.parse(text) as EmbeddedPaste);
+}

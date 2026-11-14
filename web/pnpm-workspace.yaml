@@ -1,0 +1,8 @@
+allowBuilds:
+  '@astryxdesign/cli': false
+  '@astryxdesign/core': false
+# The owner pinned Astryx 0.7.16 (the version gentoozh.org uses) before it
+# reached the release-age window.
+minimumReleaseAgeExclude:
+  - '@astryxdesign/cli@0.7.16'
+  - '@astryxdesign/core@0.7.16'
