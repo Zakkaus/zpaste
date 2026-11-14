@@ -859,15 +859,29 @@ async function checkTypeScale(browser: Browser, url: string, name: string, compl
   }
 }
 
-/** Whether the entry the rail marks current lies inside the rail's visible part. */
+/**
+ * Whether the entry the rail marks current comes to lie inside the rail's visible part within a second.
+ * The rail follows a frame after React commits the new entry (PasteOutline.tsx), which on a loaded
+ * runner can come after the entry is marked.
+ */
 function currentInRail(page: Page): Promise<boolean> {
-  return page.locator(`aside ${OUTLINE}`).evaluate(nav => {
-    const link = nav.querySelector('[aria-current]');
-    if (link == null) return false;
-    const box = nav.getBoundingClientRect();
-    const entry = link.getBoundingClientRect();
-    return entry.top >= box.top - 1 && entry.bottom <= box.bottom + 1;
-  });
+  return page
+    .waitForFunction(
+      selector => {
+        const nav = document.querySelector(selector);
+        const link = nav?.querySelector('[aria-current]');
+        if (nav == null || link == null) return false;
+        const box = nav.getBoundingClientRect();
+        const entry = link.getBoundingClientRect();
+        return entry.top >= box.top - 1 && entry.bottom <= box.bottom + 1;
+      },
+      `aside ${OUTLINE}`,
+      {polling: 'raf', timeout: 1000},
+    )
+    .then(
+      () => true,
+      () => false,
+    );
 }
 
 /**
