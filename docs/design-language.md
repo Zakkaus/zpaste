@@ -40,8 +40,7 @@ gentoozh.org is a navigation surface; its large type and card grid would push a
   but no sticky header, so how the header stays fixed is open.
 - **Outline.** A Markdown paste gets an outline from Astryx `Outline`, with
   heading anchors and scroll tracking. On wide screens it sits beside the
-  column; on a phone it opens in a drawer. Astryx 0.7.0 has `BottomSheet` and
-  `MobileNav` but `Drawer` only from 0.7.11, so the phone container is open.
+  column; below 1024 px it opens in an Astryx `Drawer` from the top bar.
 - **Links to a place.** Headings and code lines have anchors, so a link can
   point to a line.
 - **Pastes are not indexed.** Every paste page is `noindex`.
@@ -69,11 +68,11 @@ proposal and needs owner approval with the P1 first screen.
 | --- | --- |
 | `--color-background-body` | Page background. |
 | `--color-background-surface` | Panels that must stand apart from the page: the side outline, the workspace list. |
-| `--color-background-muted` | Code block and table header background. |
+| `--color-background-muted` | Code block background. |
 | `--color-background-popover` | Menus and the phone outline drawer. |
 | `--color-overlay` | Scrim behind the drawer and dialogs. |
-| `--color-border` | Hairlines: table rows, column edges, the line between outline and text. |
-| `--color-border-emphasized` | Focused fields and the current outline entry's marker. |
+| `--color-border` | Hairlines: between table rows, the line between outline and text. |
+| `--color-border-emphasized` | Focused fields, the current outline entry's marker and the line under a table's header row. |
 | `--color-text-primary` | Body text and headings. |
 | `--color-text-secondary` | Metadata: expiry, version, line numbers. |
 | `--color-text-disabled` | Disabled controls only. |
@@ -89,10 +88,136 @@ The rest of the axes the positioning leaves to decide:
 | Axis | Decision | State |
 | --- | --- | --- |
 | Density | Reading comfort over scanning density: body line height for long text, CJK line height for Chinese. | Decided by the positioning; values need owner approval |
-| Separation | Hairlines or elevation for panels. | Open |
+| Separation | Hairlines, no elevation and no boxes: an opaque top bar with a `--color-border` line under it, a line under the title row, and the outline rail set off by its label and track. | Proposed with the P1 first screen |
 | Hues | The accent plus the semantic set; the mind map adds a few low-saturation branch colours (see below). | Branch colour tokens open |
 | Motion | None decided beyond `web/AGENTS.md`. | Open |
-| Theme | Light, dark and follow-system. Upstream already stores a theme choice in a cookie. Whether the page resolves the theme before first paint from that cookie, and whether an OS switch mid-session moves the page, is open. | Open |
+| Theme | Light, dark and follow-system, switched as on gentoozh.org: one icon button in the top bar names the mode it switches to (a moon in light mode, a sun in dark mode), and pressing it on the OS's own mode goes back to following the OS. A chosen mode is kept in `localStorage` (`zpaste-theme`) and set as `data-theme` on `<html>` by `public/theme-boot.js`, a blocking script in the head, before the first paint; the Content Security Policy allows no inline script. Without a choice the page follows the OS, including a switch while it is open. Upstream's theme cookie is not read. | Proposed with the P1 first screen |
+
+## The reading page's first screen
+
+Approved with the P1 first screen (see [Approval gates](#approval-gates)); each value is a theme token or role.
+
+- **Top bar.** Opaque `--color-background-surface` with a hairline under it. Its
+  content edges are the page frame's: the product name starts where the paste
+  text starts, at every width.
+- **Title row.** The page's h1 takes the heading-2 role, one step above the body
+  and one below the paste's own first heading, which carries the page. Details
+  take the supporting role in `--color-text-secondary`. Copy is the view's one
+  primary button; Edit, Raw and Download are secondary buttons of the same size,
+  in that order: the two actions on the paste first, then the two that open it
+  elsewhere. None carries an icon, as in gentoozh.org's toolbar rows. Copy's
+  feedback ("Copied", "Failed") replaces its label without changing its width.
+  Edit shows only when the shell says the reader may edit (`can_edit`). On a
+  phone the buttons take their own row.
+- **Theme switch.** At the end of the top bar, before the phone outline button
+  (see the Theme row above).
+- **Top-bar buttons.** The theme switch and the phone outline button are ghost
+  icon buttons of one size (44 px square on a phone, 32 px from 1024 px up) with
+  one icon size, each named by its label and tooltip, as gentoozh.org's phone
+  top bar draws its theme, language and menu buttons.
+- **Headings in the paste.** The paste's `#` renders as h2, because the title
+  row holds the h1, but keeps the look of the level the author wrote: h2 takes
+  the heading-1 role, h3 heading-2, and so on.
+- **Tables.** Cells use the label role, not the reading body size, with compact
+  padding, aligned to the top. Rows are told apart by `--color-border` hairlines
+  alone: no column rules and no outer box, and the first and last columns line
+  up with the text around the table. The header row is the label in
+  `--color-text-secondary` on the page's own surface, over one
+  `--color-border-emphasized` line. Inline code in a cell has the code face
+  without its chip. Columns take the widths automatic layout gives their
+  content, and code in a cell may wrap after `/` and `-`, so a table of up to
+  three columns fits the column from tablet width up; a wider table scrolls in
+  its box with an edge shadow. On a phone the first column stays on an opaque
+  surface while the rest scrolls. It is as wide as its longest
+  unbreakable piece and at most half of the table's visible box, padding
+  included. Text in it wraps at spaces, after `/` and after `-`, never inside a
+  name such as `REQUIREMENTS.md`; only a piece wider than half the box on its
+  own, such as a long hash, breaks inside itself.
+- **Outline.** The rail carries an "On this page" label level with the title.
+  It lists the paste's `#` title and its sections down to `####`, so the entry
+  marked current is the section on screen from the first load. An outline
+  taller than the rail scrolls inside it, below the label, while the entry
+  marked current still follows the page and stays in the rail's view.
+  In the phone drawer each entry is at least the theme's touch height (44 px).
+
+## Type scale
+
+Each role is an Astryx role or a token of the theme package, and none changes
+with width: the numbers below hold from 320 to 1280 px. `REQUIREMENTS.md`,
+"Type scale", records them, and `web/scripts/shoot.ts` fails when a role renders
+another size or line height. The gentoozh.org column was measured on its
+zh-TW doc pages (a post and the binary package setup page) on 2026-11-15.
+
+| Role | Token | Zpaste (px, size / line height) | gentoozh.org doc page |
+| --- | --- | --- | --- |
+| Top-bar name | `large`, semibold | 17 / 24 | the logo image |
+| Page title (`h1`) | `heading-2` | 20 / 28 | `display-1`, 42 / 52 (29 / 36 below 640 px) |
+| Paste `#` | `heading-1` | 24 / 32 | none: the title comes from front matter |
+| Paste `##` | `heading-2` | 20 / 28 | `display-3`, 29 / 36 |
+| Paste `###` | `heading-3` | 17 / 24 | `heading-3`, 17 / 24 |
+| Paste `####` | `heading-4` | 14 / 20 | `heading-4`; no page uses it |
+| Body | the theme's Markdown body, `--font-size-lg` / 1.6471 | 17 / 28 | 17 / 28 |
+| Details | `supporting` | 12 / 20 | `supporting`, for post dates (read from the source) |
+| Table cell | `label` | 14 / 20 | body, 17 / 28 |
+| Table header | `label`, medium | 14 / 20 | 14 / 23.06, semibold |
+| Outline label | `label`, semibold | 14 / 20 | not compared |
+| Outline entry | Astryx `Outline`, compact | 14 / 20 | 14 / 20 |
+| Button | Astryx `Button`, `md` | 14 / 20 | 14 / 20 |
+| Inline code | `code` size in the body's line height | 14 / 23.06 | 14 / 23.06 |
+| Code block | `code` | 14 / 20 | 14 / 20 |
+
+Three roles differ from the site on purpose. The page title steps down for the
+paste's own first heading (see the title row above). Table cells take the label
+role because tables are data (see Tables above). The paste's `##` keeps
+Astryx's level-to-role order, `heading-2` (20 px) under `#` in `heading-1`
+(24 px), not the site's display sizes: a post on the site has its title above
+it in `display-1`, so the site sets its `##` in `display-3`, while a paste's own
+`#` is its title (D10, settled).
+
+### Chinese text
+
+Measured with `web/fixtures/chinese-hant.md` and `web/fixtures/chinese-hans.md`,
+one synthetic note written in Traditional (Taiwan) and in Simplified (mainland)
+Chinese.
+
+- **Font.** Figtree sets Latin; Chinese falls back through the theme's list,
+  which names PingFang, Noto Sans CJK and Microsoft YaHei and JhengHei, the same
+  list gentoozh.org uses on its English pages. Every weight in use is a real
+  face (Noto Sans CJK Regular, Medium for the table header, Bold for the
+  semibold headings); Chrome synthesizes no bold.
+- **Font loading.** As on gentoozh.org, Figtree's faces are
+  `font-display: optional` and the page preloads the Latin files of the three
+  weights it draws (400, 500, 600), so the first paint already uses Figtree. With
+  `swap`, a slow link painted the fallback face first and the buttons narrowed
+  when Figtree arrived, which the owner saw as the buttons hitching while the
+  page loaded. A view whose face misses the first paint keeps the fallback.
+- **Glyph forms.** The theme's list names the Simplified faces first, which
+  would draw a Traditional paste with mainland glyph forms, its `，` and `。` at
+  the bottom left rather than centred. The forms follow the paste's own text,
+  not the interface locale (D11): `web/src/reader/pasteLanguage.ts` counts, in
+  the first 20,000 characters, the characters that exist in only one script
+  (313 frequent pairs such as 這/这 and 會/会) and marks the paste's text, not the
+  chrome, `lang="zh-Hant"` or `lang="zh-Hans"` by the larger count, when that
+  count is at least five and at least twice the other. It sets no language
+  below that, so Japanese written in kanji alone (`設定項目`, whose forms are
+  also Traditional) keeps the page's; nor when there is no Chinese, when Latin
+  letters outnumber Han characters twenty to one (an English paste quoting a
+  Chinese word) or when kana stand beside the kanji (Japanese).
+  `PasteContent.module.css` gives each language the theme's faces of its
+  script first, in the order gentoozh.org's `SiteShell` uses for its zh-CN and
+  zh-TW pages. Chrome then draws the Traditional fixture with Noto Sans CJK TC
+  and the Simplified one with Noto Sans CJK SC.
+- **Line height.** The body's 1.6471 (28 px at 17 px) is the site's, below the
+  1.7 usually given for Chinese body text. It stays the site's (D12, settled);
+  a change belongs in the theme package, so the site changes with it.
+- **Line length.** 44 Chinese characters per line at 1280 px (a 752 px column
+  at 17 px) and 20 at 390 px, the same as the site's doc column. The usual
+  comfortable range is about 30 to 40; the column stays the site's (D12,
+  settled), and narrowing it is a change to the shared width.
+- **Line breaks.** No line starts with closing punctuation and no paragraph
+  overflows its column, at 390 and 1280 px.
+- **Code.** The code faces have no Chinese glyphs; a Chinese comment falls back
+  to the system's Chinese sans, as on the site.
 
 ## Renderers
 
@@ -109,10 +234,12 @@ without mermaid never downloads mermaid.
 | Diagrams (P1b) | mermaid | ` ```mermaid ` blocks and `.mermaid` files, including flowcharts, sequence diagrams and `mindmap`; `securityLevel: 'strict'`. |
 | Mind map view (P1b) | Own drawing over a layout library | Any `.md` switches to it in one action; the switch lives in the URL (`?view=mindmap`). |
 
-Astryx 0.7.0's built-in tokenizer covers JavaScript and TypeScript, JSON,
-HTML, XML and SVG, CSS, SCSS and Less, Python, shell, PHP and Hack, YAML
-and Markdown. Rust, Go, C and C++, diff, INI and TOML need a tokenizer adapter loaded per language. Which tokenizer
-backs that adapter is open.
+Astryx 0.7.16's built-in tokenizer covers JavaScript and TypeScript, JSON,
+HTML, XML and SVG, CSS, SCSS and Less, Python, shell, PHP and Hack, YAML,
+Markdown, C and C++, SQL, Rust, Kotlin, Swift and Go; a ` ```diff ` fence
+renders as a unified diff. Any other language renders as plain text, with its
+name in the block's header. Tokenizers for more languages come later, loaded
+per language.
 
 A component Astryx lacks is reported with `astryx gap-report`. Component source
 is not copied and changed.
@@ -153,6 +280,8 @@ Each state has its own screen; none is a skeleton that never resolves.
 | Network error | Says the request failed and what to do next. A failed burn read uses the burn-failed screen instead. |
 | Empty workspace (P2b) | Says the workspace holds no pastes yet. |
 | Edit conflict (P2) | A 412 on save says the paste changed since it was loaded. What the page offers next is open. |
+| Large paste | Past a render limit (`web/src/reader/renderPlan.ts`), the paste shows as plain text under an info banner that says why, with no outline; past the second limit only its start shows, and the banner points to Raw and Download. |
+| Broken page | The page's embedded paste is missing or cannot be read, or drawing it fails: the reading page's frame with a title, what happened, and a button to the raw text when the URL names the paste. |
 
 Copy for every state is in the locale catalogues; the error screens say what
 happened and what to do next, per [web/AGENTS.md](../web/AGENTS.md).
@@ -186,11 +315,11 @@ The baseline is [web/AGENTS.md](../web/AGENTS.md), "Accessibility". Zpaste adds:
 
 The plan requires one screen to be approved before a pattern spreads.
 
-| Gate | Screen | Waits on it |
-| --- | --- | --- |
-| P1 reading page | `r8BaRKfkXfi` rendered at 1280 px light and 390 px dark | The type scale, spacing, readable column width, outline placement, table and code treatment; then the error, password and burn screens, the three locales and the new-paste page. |
-| P1b mind map | markmap's default style and the token-drawn style side by side, 1280 px light and 390 px dark | The layout library choice and every rule in [Mind map](#mind-map). |
-| P2b workspace | A workspace with several plans and results, 1280 px light and 390 px dark | The list grouping, the two-pane wide layout and the two-level phone flow. |
+| Gate | Screen | Waits on it | State |
+| --- | --- | --- | --- |
+| P1 reading page | `r8BaRKfkXfi` rendered at 1280 px light and 390 px dark | The type scale, spacing, readable column width, outline placement, table and code treatment; then the error, password and burn screens, the three locales and the new-paste page. | Approved. Owner, 2026-11-15: 「按鈕加載的時候卡了下 其他都可以了」; the hitch was the web font swapping in, fixed as [Chinese text](#chinese-text), "Font loading", records. |
+| P1b mind map | markmap's default style and the token-drawn style side by side, 1280 px light and 390 px dark | The layout library choice and every rule in [Mind map](#mind-map). | Waiting |
+| P2b workspace | A workspace with several plans and results, 1280 px light and 390 px dark | The list grouping, the two-pane wide layout and the two-level phone flow. | Waiting |
 
 ## Deliberately not doing
 
@@ -215,11 +344,18 @@ tables, side-by-side diffs, splitting multi-file pastes.
 | # | Item | Blocks |
 | --- | --- | --- |
 | D1 | How table headers stay fixed while Astryx 0.7.0 `Table` has no sticky header (gap report, an Astryx upgrade, or our own CSS). | P1 |
-| D2 | The phone outline container: `BottomSheet` in 0.7.0 or `Drawer` after an upgrade to 0.7.11. | P1 |
-| D3 | The tokenizer behind the adapter for Rust, Go, C and C++, diff, INI and TOML. | P1 |
+| D3 | The tokenizer for languages Astryx 0.7.16 does not cover (INI, TOML and others), loaded per language. | P1 |
 | D4 | Which Astryx token names the theme package exports, and the tokens for mind map branch colours. | P1, P1b |
 | D5 | Separation device (hairlines or elevation) and motion. | P1 first screen |
-| D6 | Theme and locale resolution before first paint, and whether an OS theme switch moves an open page. | P1 |
+| D6 | Locale resolution before first paint. The theme is resolved before first paint and follows an OS switch (see Theme), pending the owner's approval. | P1 |
 | D7 | Recording Markdown tables on phones as an exception to `web/AGENTS.md`, "Phone width", in `REQUIREMENTS.md`, "Exceptions". | P1 |
 | D8 | Layout library for the mind map: markmap or `d3-flextree`. | P1b |
 | D9 | What the edit page offers after a 412: reload, show a diff, or overwrite. gzpaste's behaviour is decided (plan section 五); the page's is not. | P2 |
+
+## Settled items
+
+| # | Item | Ruling |
+| --- | --- | --- |
+| D10 | The paste's heading roles. | Astryx's order: `#` in `heading-1` (24 px), `##` in `heading-2` (20 px), not the site's display sizes. Owner, 2026-11-15: 「可以」 to this recommendation. See [Type scale](#type-scale). |
+| D11 | Chinese glyph forms. | By the paste's own text, detected on the paste's text only, not by the interface locale. Technical decision, 2026-11-15. See [Chinese text](#chinese-text). |
+| D12 | Chinese line height and line length. | Identical to gentoozh.org: 17 / 28 px and about 44 Chinese characters per line at 1280 px. A change belongs in the shared theme package, so the site changes too. Owner, 2026-11-15: 「可以」 to this recommendation. See [Chinese text](#chinese-text). |

@@ -1,0 +1,88 @@
+name: Web
+
+# The frontend half of the merge gate, on the same events as rust.yml.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    working-directory: web
+
+jobs:
+  web:
+    name: Lint, test and build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0; pnpm version from web/package.json packageManager
+        with:
+          package_json_file: web/package.json
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm check:size
+
+  shoot:
+    # The screenshot and layout checks of web/scripts/shoot.ts against the production build, in
+    # Playwright's pinned Chromium with the Noto CJK faces, once per fixture as the main paste. The
+    # first-paint check stays local (--ci). The shots are kept as an artifact for review.
+    name: Screenshots (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: sample
+            fixture: ''
+          - name: chinese-hant
+            fixture: fixtures/chinese-hant.md
+          - name: chinese-hans
+            fixture: fixtures/chinese-hans.md
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0; pnpm version from web/package.json packageManager
+        with:
+          package_json_file: web/package.json
+      - run: pnpm install --frozen-lockfile
+      - name: Install Chromium and CJK fonts
+        # The browser build is the one @playwright/test (pinned in pnpm-lock.yaml) names.
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends fonts-noto-cjk
+          pnpm exec playwright install --with-deps --only-shell chromium
+      - run: pnpm build
+      - run: node scripts/shoot.ts "$RUNNER_TEMP/shots" --ci
+        env:
+          CHROME: bundled
+          ZPASTE_FIXTURE: ${{ matrix.fixture }}
+      - name: Keep the shots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: shots-${{ matrix.name }}
+          path: ${{ runner.temp }}/shots
+          retention-days: 14

@@ -1,0 +1,10 @@
+/*
+ * Outline entries in the phone drawer are touch targets: each is at least the theme's element height,
+ * which the theme raises to 44 px below its md breakpoint (web/AGENTS.md, "Accessibility"). Outline
+ * has no size prop for its entries, so this reaches its links.
+ */
+.drawer a {
+  display: flex;
+  align-items: center;
+  min-block-size: var(--size-element-md);
+}

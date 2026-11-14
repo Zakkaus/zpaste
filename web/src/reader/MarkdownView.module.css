@@ -1,0 +1,200 @@
+/*
+ * Rules on the DOM Astryx Markdown renders, which its props do not reach. Wide tables keep scrolling
+ * inside Astryx's own wrapper; these rules add the fixed first column and the edge shadow that the
+ * table exception in REQUIREMENTS.md describes.
+ */
+
+/*
+ * A heading reached through its link scrolls clear of the sticky top bar. AppShell (height auto)
+ * publishes the bar's measured height as --_app-shell-header-height on its root.
+ */
+.body :is(h1, h2, h3, h4, h5, h6)[id] {
+  scroll-margin-top: calc(var(--_app-shell-header-height, 0rem) + var(--spacing-4));
+}
+
+/*
+ * The page's h1 is the title row, so a paste's `#` renders as h2 (MarkdownView). Its look keeps the
+ * level the author wrote: h2 takes the heading-1 role, h3 heading-2, and so on. Without this, `###`
+ * drew smaller than the body text beside it.
+ */
+.body h2 {
+  font-size: var(--text-heading-1-size);
+  font-weight: var(--text-heading-1-weight);
+  line-height: var(--text-heading-1-leading);
+}
+.body h3 {
+  font-size: var(--text-heading-2-size);
+  font-weight: var(--text-heading-2-weight);
+  line-height: var(--text-heading-2-leading);
+}
+.body h4 {
+  font-size: var(--text-heading-3-size);
+  font-weight: var(--text-heading-3-weight);
+  line-height: var(--text-heading-3-leading);
+}
+.body h5 {
+  font-size: var(--text-heading-4-size);
+  font-weight: var(--text-heading-4-weight);
+  line-height: var(--text-heading-4-leading);
+}
+.body h6 {
+  font-size: var(--text-heading-5-size);
+  font-weight: var(--text-heading-5-weight);
+  line-height: var(--text-heading-5-leading);
+}
+
+/*
+ * Images (MarkdownView's renderer), as Astryx draws its own: never wider than the column, with the
+ * element radius. One on its own line is a block with Astryx's image spacing, none at the paste's start
+ * or end; the alt text that replaces a failed image takes the same place.
+ */
+.image {
+  max-width: 100%;
+  border-radius: var(--radius-element);
+}
+.body > .image {
+  display: block;
+  margin-block: var(--spacing-3);
+}
+.body > .image:first-child {
+  margin-block-start: 0;
+}
+.body > .image:last-child {
+  margin-block-end: 0;
+}
+
+/* Inline code in a heading, such as a file name, takes the heading's size instead of the code size. */
+.body :is(h2, h3, h4, h5, h6) code {
+  font-size: inherit;
+}
+
+/*
+ * Tables are data, not prose: their cells use the label role instead of the reading body size the
+ * theme gives Markdown, so a row is as tall as its content and wraps less on a phone.
+ */
+.body :global(.astryx-table-scroll-wrapper) {
+  --text-body-size: var(--text-label-size);
+  --text-body-leading: var(--text-label-leading);
+}
+
+/*
+ * Rows are told apart by hairlines alone: no column rules and no outer box, which Astryx's Markdown
+ * table draws as a full grid (docs/design-language.md, "Tables"). The text of the first and last
+ * columns lines up with the paragraphs around the table. Cells of unequal height align to the top
+ * (web/AGENTS.md, "Alignment").
+ */
+.body :global(.astryx-table-scroll-wrapper) table {
+  border-width: 0;
+}
+.body :global(.astryx-table-scroll-wrapper) :is(th, td) {
+  border-inline-width: 0;
+  padding-block: var(--spacing-1-5);
+  padding-inline: var(--spacing-2);
+  line-height: var(--text-label-leading);
+  vertical-align: top;
+}
+.body :global(.astryx-table-scroll-wrapper) :is(th, td):first-child {
+  padding-inline-start: 0;
+}
+.body :global(.astryx-table-scroll-wrapper) :is(th, td):last-child {
+  padding-inline-end: 0;
+}
+.body :global(.astryx-table-scroll-wrapper) tbody tr:last-child > td {
+  border-block-end-width: 0;
+}
+
+/* The header is a quieter label row over one stronger hairline, on the page's own surface. */
+.body :global(.astryx-table-scroll-wrapper) th {
+  color: var(--color-text-secondary);
+  font-weight: var(--text-label-weight);
+  border-block-end-color: var(--color-border-emphasized);
+}
+
+/*
+ * Inline code in a cell is set in the code face without the chip it has in a paragraph, so a column
+ * of file names reads as text rather than a wall of pills. Astryx's own table-cell code keeps a token
+ * whole (word-break normal); MarkdownView's renderer replaces it, so that is restored here.
+ */
+.body :global(.astryx-table-scroll-wrapper) code {
+  background: none;
+  padding-inline: 0;
+  border-radius: 0;
+  word-break: normal;
+}
+
+/*
+ * Columns take the widths automatic table layout gives their content, over Astryx's readable floors.
+ * Code in a cell may wrap after `/` (MarkdownView's `<wbr>`) and `-`, never inside a name such as
+ * `REQUIREMENTS.md`, so a column of paths gives way before a prose column does and a table that fits
+ * at its natural size does not scroll. Wrapping inserts no characters, so a copied cell is the text
+ * as written. Outside table cells the break opportunities are hidden and inline code wraps as before.
+ */
+.body wbr {
+  display: none;
+}
+.body :global(.astryx-table-scroll-wrapper) wbr {
+  display: inline;
+}
+.body :global(.astryx-table-scroll-wrapper) code {
+  white-space: normal;
+}
+
+/*
+ * On a phone the first column stays while the rest scrolls under it, on an opaque surface. It is as
+ * wide as its longest unbreakable piece, and at most half of the table's visible box, padding
+ * included, so the columns that scroll stay readable. The cap is measured against the scroll wrapper
+ * (a size container, so `cqi`), not the viewport and not the full table width. Astryx sizes these
+ * cells as content boxes; the first column has `--spacing-2` padding at its end only, so the cap on
+ * the text box is 50cqi less that. Astryx's readable floor for the column (the header cell's
+ * `--x-minWidth`) is kept below the cap and lowered to it above. Only a piece wider than the cap on
+ * its own, such as a long hash, breaks inside itself (`break-word`).
+ */
+.body :global(.astryx-table-scroll-wrapper) {
+  container-type: inline-size;
+}
+/* literal-ok: the theme's phone breakpoint (gentoo.css `width < 640px`); a media query reads no custom property */
+@media (width < 640px) {
+  .body :global(.astryx-table-scroll-wrapper) :is(th, td):first-child {
+    /* literal-ok: half the table's box is the cap itself (REQUIREMENTS.md, "Exceptions") */
+    --_first-column-cap: calc(50cqi - var(--spacing-2));
+    position: sticky;
+    inset-inline-start: 0;
+    z-index: 1;
+    background-color: var(--color-background-surface);
+    min-width: min(var(--x-minWidth, 0px), var(--_first-column-cap));
+    max-width: var(--_first-column-cap);
+    overflow-wrap: break-word;
+  }
+  .body :global(.astryx-table-scroll-wrapper) :is(th, td):first-child code {
+    overflow-wrap: break-word;
+  }
+}
+
+/*
+ * An edge shadow shows that more columns are off screen. The shadow stays at the box's edge
+ * (attachment scroll); a cover of the same width rides at the end of the content (attachment local)
+ * and hides it once the last column is in view, or when nothing overflows.
+ */
+.body :global(.astryx-table-scroll-wrapper) {
+  /* literal-ok: the gradients' geometry: full height, centred on the box's end edge */
+  background:
+    linear-gradient(var(--color-background-surface), var(--color-background-surface)) right / var(--spacing-3) 100% no-repeat local,
+    radial-gradient(farthest-side at 100% 50%, var(--color-overlay-pressed), transparent) right / var(--spacing-3) 100% no-repeat scroll;
+}
+
+/*
+ * Fenced code in a paste. CodeBlock skips the layout of off-screen code (content-visibility: auto)
+ * and reserves an estimate that ignores wrapped lines, so the page grew by screens as the reader
+ * scrolled and a jump to a heading landed short of it (1,120 px in the sample paste). Rendering the
+ * code in full keeps every anchor where the outline points. Wrapped lines break between words, not
+ * inside them, and only a word wider than the column breaks.
+ */
+.body :global(.astryx-code-block) code {
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Long blocks render in chunks, each skipped while off screen. */
+.body :global(.astryx-code-block) code :where(*) {
+  content-visibility: visible;
+}

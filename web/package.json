@@ -1,0 +1,43 @@
+{
+  "name": "zpaste-web",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@11.15.1",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint . && node scripts/lint-css.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check:size": "node scripts/check-size.ts",
+    "shoot": "node scripts/shoot.ts"
+  },
+  "dependencies": {
+    "@astryxdesign/core": "0.7.16",
+    "@fontsource/figtree": "5.3.0",
+    "@gentoozh/astryx-theme": "github:gentoo-zh/gentoozh-astryx-theme#v0.1.0",
+    "@stylexjs/stylex": "0.19.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@astryxdesign/cli": "0.7.16",
+    "@playwright/test": "1.64.1",
+    "@stylexjs/unplugin": "0.19.1",
+    "@types/node": "22.20.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "eslint": "10.12.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "jsdom": "31.0.1",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.2",
+    "vite": "8.3.4",
+    "vitest": "5.1.0"
+  }
+}

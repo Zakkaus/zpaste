@@ -1,0 +1,38 @@
+// The English catalogue. zh-CN and zh-TW follow with the same keys after the first screen is approved
+// (docs/design-language.md, "Approval gates").
+export const en = {
+  'app.name': 'Zpaste',
+  'nav.label': 'Zpaste',
+  'paste.untitled': 'Paste {id}',
+  'paste.created': 'Created',
+  'paste.expires': 'Expires',
+  'paste.never': 'Never expires',
+  'paste.language': 'Language',
+  'paste.plainText': 'Plain text',
+  'paste.detailSeparator': ' · ',
+  'action.raw': 'Raw',
+  'action.copy': 'Copy',
+  'action.copied': 'Copied',
+  'action.copyFailed': 'Copy failed',
+  'action.copyFailedShort': 'Failed',
+  'action.copiedAnnouncement': 'Paste copied to the clipboard',
+  'action.download': 'Download',
+  'action.edit': 'Edit',
+  'action.actions': 'Paste actions',
+  'outline.label': 'On this page',
+  'outline.open': 'Outline',
+  'outline.drawerNav': 'Sections',
+  'theme.toDark': 'Switch to dark mode',
+  'theme.toLight': 'Switch to light mode',
+  'large.title': 'Large paste',
+  'large.plain': 'This paste has more than {limit} characters, so it is shown as plain text, without formatting or an outline.',
+  'large.truncated': 'This paste has more than {limit} characters, so only its start is shown, as plain text. Raw and Download have all of it.',
+  'error.title': 'This paste could not be shown',
+  'error.missing': 'The page arrived without a readable copy of the paste.',
+  'error.render': 'Something went wrong while drawing the paste.',
+  'error.nextRaw': 'Reload the page, or open the raw text.',
+  'error.nextReload': 'Reload the page to try again.',
+  'error.openRaw': 'Open raw text',
+} as const;
+
+export type MessageKey = keyof typeof en;
