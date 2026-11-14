@@ -1,11 +1,14 @@
 # Changelog
 
-Notable changes to Zpaste. A release tag `vX.Y.Z` publishes the section headed
-`[X.Y.Z]` as the release notes and fails when that section is missing, so add it
-before tagging. wastebin's own changes up to commit `c0ec968` are in
+Notable changes to Zpaste. A release tag `vX.Y.Z` (or `vX.Y.Z-beta.N`)
+publishes the section headed `[X.Y.Z]` as the release notes and fails when that
+section is missing, so add it before tagging. wastebin's own changes up to commit `c0ec968` are in
 [docs/upstream/CHANGELOG.md](docs/upstream/CHANGELOG.md).
 
-## [Unreleased]
+## [0.1.0-beta.1]
+
+The first Zpaste version is a beta. Its tag `v0.1.0-beta.1` publishes a GitHub
+prerelease and the image tag `0.1.0-beta.1`.
 
 ### Changed
 
@@ -13,5 +16,15 @@ before tagging. wastebin's own changes up to commit `c0ec968` are in
   target. Configuration variables keep the `WASTEBIN_` prefix.
 - The container image runs as uid and gid 10001.
 - CI builds the image on every pull request and pushes it to
-  `ghcr.io/zakkaus/zpaste` from main and from version tags. A version tag also
-  attaches the static x86_64 musl executables to its GitHub release.
+  `ghcr.io/zakkaus/zpaste` from main (`main` and `sha-<short>`). A version tag
+  is published by `release.yml` alone: it checks the tag against the Cargo.toml
+  version and main, pushes `<version>` and `sha-<short>`, attaches the static
+  x86_64 musl executables copied out of that same image, and writes the image
+  digest into the release notes.
+- Images are amd64 only and there is no `latest` tag; deployments pin the digest.
+  The Dockerfile's arm64 stage builds only with
+  `--build-arg CARGO_TARGETS=aarch64-unknown-linux-musl`, and no workflow builds it.
+- The image builder is pinned: the `rust:1.95` base by digest, zig by its
+  published sha256, `cargo-zigbuild` by version.
+- The upstream theme showcase is no longer built; `crates/wastebin_theme_showcase`
+  stays in the workspace without a workflow.
