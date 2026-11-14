@@ -38,7 +38,7 @@ what fails when it is broken, so a change can be judged against it.
 | 8 | A write authenticated by cookie must carry an `Origin` equal to the configured public URL (scheme, host and port); forwarded headers are not trusted. Bearer requests skip this check. | Another site makes the reader's browser edit or delete their pastes (CSRF). | Target, P1 |
 | 9 | A Bearer token that fails verification returns 401. The server never mints a new identity in its place. | A client's pastes split across identities without notice, and "my pastes" loses some of them. | Target, P1 |
 | 10 | Every path that runs the password key derivation shares one concurrency limit and one per-IP rate limit, and answers 429 with `Retry-After` past it. | Parallel wrong-password requests exhaust memory: each derivation takes 64 MiB. | Target, P1 |
-| 11 | The client IP is taken from `CF-Connecting-IP` only when the connection comes from a Cloudflare address range; otherwise from the connection itself. | A client sets the header and escapes the rate limit. | Target, P1 |
+| 11 | The client IP is taken from `CF-Connecting-IP` only when the connection comes from a configured trusted proxy (`WASTEBIN_TRUSTED_PROXIES`: Cloudflare's ranges, or the local Traefik hop while the firewall admits only Cloudflare); otherwise from the connection itself. No other forwarding header is read. | A client sets the header and escapes the rate limit. | Target, P1 |
 | 12 | An expired paste and a missing paste give the same 404, and a paste's history is deleted with it. | The API tells a caller which ids existed, and history outlives the paste it belongs to. | Target, P1 (404), P2 (history) |
 | 13 | The OpenAPI file is generated from the Rust handlers, and the frontend types are generated from that file; neither is edited by hand. | Server and client drift apart while both still compile. | Target, P0 draft, P1 checks |
 | 14 | A failed migration stops the server before it serves traffic. | The server accepts requests against a half-migrated schema and writes bad rows. | Current (upstream migrates at start-up) |
@@ -180,7 +180,7 @@ flowchart LR
 | --- | --- | --- |
 | Image build | Three stages: Node builds the web app, Rust builds a static musl executable that embeds it, a minimal base (distroless or scratch) runs it as uid 10001. | The CI change is a separate P0 task. |
 | Registry | `ghcr.io/zakkaus/zpaste:<version>`. Compose pins the digest, not the tag, so a rollback is a digest swap. | The version scheme is open. |
-| Configuration | `/etc/zpaste/env`, root 600, values moved from the current setup unchanged (invariant 2). Variables keep the `WASTEBIN_` prefix. | |
+| Configuration | `/etc/zpaste/env`, root 600, values moved from the current setup unchanged (invariant 2). Variables keep the `WASTEBIN_` prefix. New in P1: `WASTEBIN_KDF_RATE` and `WASTEBIN_TRUSTED_PROXIES` ("Reliability"). | The trusted proxy range for matrix is read from the host at release ([workflow.md](workflow.md)). |
 | Data | `/var/lib/zpaste/state.db`, owned by uid 10001. Backups cover `/var/lib/zpaste`. | The backup schedule is open. |
 | Network | Target: Cloudflare is the only way in; the host firewall accepts origin traffic from Cloudflare ranges only. Host rules (firewall edits, rootless Docker) are in [workflow.md](workflow.md#deployment-and-rollback). | |
 
@@ -421,7 +421,7 @@ Target, P1:
 
 | Route | Becomes |
 | --- | --- |
-| `POST /`, `/raw/<id>`, `DELETE /<id>` | Thin adapters over the `/v1` services (invariant 1). One set of scenario tests runs against both paths. |
+| `POST /`, `/raw/<id>`, `DELETE /<id>` | Thin adapters over the `/v1` services (invariant 1). One set of scenario tests runs against both paths. Current for `POST /`, `POST /new`, `/raw/<id>` and `/dl/<id>`: they call `crates/wastebin_server/src/service.rs`, as `/v1` does, and keep upstream's statuses (403 for a wrong password, the HTML password form for a missing one); `/raw` and `/dl` consume a burn paste on read, as upstream did. `v1::tests::legacy` runs the scenarios through every create route and both read routes. |
 | `/md/<id>.<ext>` | 302 to `/<id>.<ext>`. |
 | `/burn`, `/dl`, `/qr` | Kept. |
 | `GET /<id>[.<ext>]` | The HTML shell. |
@@ -474,7 +474,24 @@ rollback past a migration restores the backup; see [workflow.md](workflow.md).
   so every derivation path, `/v1` and legacy, passes through it. It allows
   `WASTEBIN_KDF_CONCURRENCY` derivations at once (default 2, 128 MiB); a
   request waits up to 1 s for a slot, then gets 429 with `Retry-After: 1`.
-  The per-IP rate is not built yet (P1, A3).
+  Current: the per-client rate is built in front of it
+  (`crates/wastebin_server/src/client.rs`). A client may start
+  `WASTEBIN_KDF_RATE` derivations per minute, with a burst of the same number
+  (default 10, A3); past that it gets 429 with `Retry-After` set to the seconds
+  until it may derive again. Only a request about to derive spends one:
+  credential, `Origin`, body and 404 answers come first, and a read of a plain
+  paste never counts. `/v1`, the legacy create and read routes and the HTML
+  password form all count against the same rate.
+- **Client address.** The rate is kept per client: the connection's address,
+  or `CF-Connecting-IP` when the connection comes from a range in
+  `WASTEBIN_TRUSTED_PROXIES` (comma-separated CIDR ranges or addresses, plus
+  `unix` to trust a Unix-socket peer). The default is empty: every request is
+  keyed by its own connection, and `X-Forwarded-For` is never read. An IPv6
+  client is keyed by its /64. Untrusted Unix-socket connections have no
+  address and share one key. On matrix the connection comes from Traefik, so
+  the setting is Traefik's Docker network; that is sound only while the
+  firewall admits nothing but Cloudflare, which is the "Origin exposure"
+  target below.
 - **Two rate-limit layers.** Traefik limits every request (average 8, burst 40).
   Zpaste limits only the derivation paths. Both stay.
 - **Origin exposure.** Target: the origin accepts Cloudflare only, so the per-IP limit
@@ -524,7 +541,7 @@ Points the plan does not decide. Each blocks the phase named.
 | --- | --- | --- |
 | A1 | Settled 2026-11-15: utoipa 6.0.0, openapi-typescript 7.13.0 (with TypeScript 5.9.3) and openapi-fetch 0.17.0 work together; evidence and gaps in `docs/api/README.md`, "Generating the contract in P1". | P0 (contract draft) |
 | A2 | Image version scheme for `ghcr.io/zakkaus/zpaste:<version>`. | P0 (CI) |
-| A3 | Value of the per-IP derivation rate, and confirmation of the concurrency default (2, `WASTEBIN_KDF_CONCURRENCY`). | P1 |
+| A3 | Value of the per-IP derivation rate (built in P1 with a default of 10 per minute and a burst of 10, `WASTEBIN_KDF_RATE`, awaiting the owner), and confirmation of the concurrency default (2, `WASTEBIN_KDF_CONCURRENCY`). | P1 |
 | A4 | Whether the shell answers HTTP 404 or 200 for a missing or expired id (the app shows the same screen either way). | P1 |
 | A5 | Fate of `POST /{id}`, `POST /new`, `POST /delete/{id}` and `/theme` once the upstream forms are gone. | P1 |
 | A6 | Fate of `wastebin_highlight` and `wastebin_theme_showcase` once the server stops highlighting. | P1 |

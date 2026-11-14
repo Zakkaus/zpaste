@@ -59,6 +59,7 @@ meanwhile.
 | Context handoff limit (share of the model's window) | | a setting, not measured | orchestrator |
 | Status check interval while several jobs run | | a setting, not measured | orchestrator |
 | Commit subject length | 72 characters | a setting, not measured | commit hook |
+| Key derivations per client per minute, also the burst (`WASTEBIN_KDF_RATE`) | | a setting, not measured; the server defaults to 10 until the owner sets it (`docs/architecture.md`, A3) | `v1::tests::content`, `v1::tests::legacy` |
 
 ## Enforcement
 
@@ -155,6 +156,7 @@ body.
 | Numbers: Wait timeout before a stuck step is recorded and left | the owner has not set a value for this repository | the owner sets it; ask with the next batch of open questions | 2026-12-14 |
 | Numbers: Context handoff limit (share of the model's window) | the owner has not set a value for this repository | the owner sets it; ask with the next batch of open questions | 2026-12-14 |
 | Numbers: Status check interval while several jobs run | the owner has not set a value for this repository | the owner sets it; ask with the next batch of open questions | 2026-12-14 |
+| Numbers: Key derivations per client per minute, also the burst (`WASTEBIN_KDF_RATE`) | built with a default of 10 (P1); the owner has not confirmed a value | the owner sets it with the next batch of open questions (`docs/architecture.md`, A3) | 2026-12-14 |
 | Enforcement: AGENTS.md: Frontend–backend mapping (when both exist) | no gate yet; `web/` does not exist until P1 | fill when the first `/v1` endpoint and its frontend caller exist, with the contract test from plan section 四 (plan v11, section 六, P1) | 2027-01-31 |
 | Enforcement: web/AGENTS.md: Components and modularity | no gate yet; `web/` does not exist until P1 | add the frontend gates (lint, type check, build) and the review row (plan v11, section 六, P1) | 2027-01-31 |
 | Enforcement: web/AGENTS.md: Consistency | no gate yet; `web/` does not exist until P1 | add the frontend gates and the review row (plan v11, section 六, P1) | 2027-01-31 |
