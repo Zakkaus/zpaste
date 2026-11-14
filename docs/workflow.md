@@ -133,6 +133,17 @@ Before the release:
 4. The signing key and salt are read from the current `.env` (root 600, with
    `sudo`) and written to `/etc/zpaste/env` unchanged. If no salt was set, the
    upstream default `somesalt` is what the old service used, and it stays.
+5. `WASTEBIN_TRUSTED_PROXIES` in `/etc/zpaste/env` is the subnet of the
+   Docker network on which Traefik reaches the container, read on the host
+   with `docker network inspect traefik --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}'`.
+   Without it every request counts as coming from Traefik, and all readers
+   share one derivation rate. The setting trusts `CF-Connecting-IP` from
+   anything that reaches Traefik, so the firewall must admit only Cloudflare's
+   ranges (<https://www.cloudflare.com/ips-v4>,
+   <https://www.cloudflare.com/ips-v6>) on the HTTP and HTTPS ports first. A
+   container that Cloudflare reaches without Traefik lists Cloudflare's ranges
+   instead. `WASTEBIN_KDF_RATE` stays unset (10 per minute) until the owner
+   sets a value (architecture A3).
 
 Release steps:
 
@@ -146,7 +157,10 @@ Release steps:
 3. Start the new image's digest from `/opt/zpaste/compose.yml`, with the same
    signing key, salt, Traefik labels and rate limit.
 4. Spot-check: an old paste, an encrypted paste, deleting as owner, creating
-   with gzpaste.
+   with gzpaste. Then send wrong passwords for an encrypted paste from one
+   client through Cloudflare in quick succession: the eleventh is 429, and a
+   second client is still answered 401, which shows the server keys the rate
+   by `CF-Connecting-IP` and not by Traefik's address.
 5. On failure, stop Zpaste. For P1, start the old service from the untouched
    `/opt/wastebin`. After P2, restore the backup, then switch back to the
    previous digest.

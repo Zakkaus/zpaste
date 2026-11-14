@@ -307,10 +307,10 @@ that document and of the draft with `tsc` 5.9.3 (`strict`,
 
 ### Where each part comes from
 
-- Operations: `#[utoipa::path]` on the handlers in `v1/pastes.rs` (and
-  `GET /` on `handlers/html/index.rs`), compiled only in tests
-  (`#[cfg_attr(test, utoipa::path(...))]`). Summary and description come from
-  the handler's doc comment.
+- Operations: `#[utoipa::path]` on the handlers in `v1/pastes.rs` and
+  `v1/content.rs` (and `GET /` on `handlers/html/index.rs`), compiled only in
+  tests (`#[cfg_attr(test, utoipa::path(...))]`). Summary and description
+  come from the handler's doc comment.
 - Schemas: `ToSchema` on the request and response types in `v1/model.rs`.
   Each response shape is its own closed struct (`#[serde(deny_unknown_fields)]`
   gives `additionalProperties: false`), never the storage struct.
@@ -367,8 +367,8 @@ timestamps.
 The generated document keeps the whole contract. Each operation not built
 yet is declared in `v1/contract/pending/mod.rs`: a bodiless function carrying
 `#[utoipa::path]` and its `x-phase`, which no router mounts and which never
-answers a request. In this slice that is every `P2` and `P2b` operation plus
-`listPastes` and `readContent` (`P1`, next slice). Building an operation
+answers a request. Since the third P1 slice that is every `P2` and `P2b`
+operation. Building an operation
 moves its annotation from the pending module to the handler and its route
 into `v1_routes!` in `v1/mod.rs`, in the same pull request;
 `router_matches_document` fails otherwise. Schemas only those operations
@@ -400,4 +400,32 @@ Decided while building P1, within the contract:
   nothing; the legacy routes answer 429 in their own format with the same
   header. Credential, `Origin` and body errors are answered first. A request
   that derives nothing (a create without a password, a read of a plain paste)
-  never takes a slot. The per-IP rate of plan section 四 is not built yet.
+  never takes a slot.
+- Before taking a slot, a derivation spends one token of the client's rate:
+  `WASTEBIN_KDF_RATE` per minute with a burst of the same number (default
+  10). Without a token the request is 429 `rate_limited` with `Retry-After`
+  set to the whole seconds until the next token, and derives, writes and
+  consumes nothing. The client is the connection's address, or
+  `CF-Connecting-IP` when the connection comes from a range in
+  `WASTEBIN_TRUSTED_PROXIES` (empty by default); an IPv6 client counts by its
+  /64. The legacy routes and the HTML password form spend from the same rate
+  and send the same `Retry-After`.
+- `readContent` checks in this order: the `Origin` rule (403, before the
+  paste is looked up), the body (400), the paste (404), a missing password on
+  an encrypted paste (409 `password_required`), the client's rate and the
+  derivation slot (429), the password (401 `wrong_password` with
+  `WWW-Authenticate: Paste-Password realm="zpaste"`), the confirmation of a
+  burn paste (409 `confirmation_required`), then the consumption (404 when a
+  concurrent request consumed it first). Checking a password never deletes;
+  only the consumption does, in one database command.
+- `readContent` takes no credentials, so it neither verifies nor rejects an
+  `Authorization` header; with one, the cookie is ignored and the `Origin`
+  rule does not apply. A plain paste ignores `password` and derives nothing;
+  `confirm_burn` on a paste that does not burn is ignored. `"password": null`
+  counts as no password.
+- `listPastes` answers credentials first (401), then the query (400): `owner`
+  other than `me`, a `limit` that is not an integer from 1 to 100, and every
+  refused `marker` (malformed, unknown, expired or another identity's) get
+  400, the marker cases with one message. Unknown query parameters are
+  ignored. The `next` link percent-encodes its query, because an id may hold
+  `+`.

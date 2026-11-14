@@ -1,6 +1,8 @@
 //! The current state of a paste: its metadata and the head of its version chain.
 
-use rusqlite::params;
+use chacha20poly1305::XNonce;
+use rusqlite::types::Value;
+use rusqlite::{Connection, TransactionBehavior, params, params_from_iter};
 
 use super::{Error, Handler, write};
 use crate::id::Id;
@@ -29,6 +31,84 @@ pub struct Head {
     pub version_id: VersionId,
 }
 
+/// The stored bytes of one version: compressed, and ciphertext when `nonce` is set.
+#[derive(Debug)]
+pub struct Stored {
+    pub data: Vec<u8>,
+    pub nonce: Option<XNonce>,
+}
+
+/// One page of [`super::Database::list_for`].
+#[derive(Debug)]
+pub struct ListPage {
+    /// At most the requested number of pastes, newest first.
+    pub heads: Vec<Head>,
+    /// Whether more pastes follow the last one.
+    pub more: bool,
+}
+
+/// Columns every head query selects, `e` being `entries` and `r` the head revision; `?2` asks for
+/// the stored bytes.
+const HEAD_COLUMNS: &str = "e.id, e.uid, e.title, e.extension, e.nonce IS NOT NULL,
+    COALESCE(e.burn_after_reading, 0), strftime('%Y-%m-%dT%H:%M:%SZ', e.expires),
+    COALESCE(e.expires < datetime('now'), 0), r.version, r.version_id,
+    CASE WHEN ?2 THEN r.data END, CASE WHEN ?2 THEN r.nonce END";
+
+fn blob_error(
+    index: usize,
+    err: impl std::error::Error + Send + Sync + 'static,
+) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(index, rusqlite::types::Type::Blob, Box::new(err))
+}
+
+/// A row of [`HEAD_COLUMNS`]: the head, the stored bytes when asked for, and whether it expired.
+fn head_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Head, Option<Stored>, bool)> {
+    let version_id = <[u8; 32]>::try_from(row.get::<_, Vec<u8>>(9)?.as_slice())
+        .map_err(|err| blob_error(9, err))?;
+    let nonce = row
+        .get::<_, Option<Vec<u8>>>(11)?
+        .map(|nonce| XNonce::try_from(nonce.as_slice()).map_err(|err| blob_error(11, err)))
+        .transpose()?;
+    let stored = row
+        .get::<_, Option<Vec<u8>>>(10)?
+        .map(|data| Stored { data, nonce });
+
+    let head = Head {
+        id: Id::from(row.get::<_, i64>(0)?),
+        uid: row.get(1)?,
+        title: row.get(2)?,
+        extension: row.get(3)?,
+        encrypted: row.get(4)?,
+        burn_after_reading: row.get(5)?,
+        expires_at: row.get(6)?,
+        version: row.get(8)?,
+        version_id: VersionId::from_bytes(version_id),
+    };
+
+    Ok((head, stored, row.get(7)?))
+}
+
+/// [`Handler::head`] on `conn`, which may be a transaction.
+fn head_on(conn: &Connection, id: Id, with_data: bool) -> super::HeadResult {
+    let (head, stored, expired) = conn.query_row(
+        &format!(
+            "SELECT {HEAD_COLUMNS}
+             FROM entries e JOIN revisions r ON r.entry_id = e.id
+             WHERE e.id = ?1
+             ORDER BY r.version DESC
+             LIMIT 1"
+        ),
+        params![id.to_i64(), with_data],
+        head_from_row,
+    )?;
+
+    if expired {
+        return Err(Error::NotFound);
+    }
+
+    Ok((head, stored))
+}
+
 impl Handler {
     /// Insert `entry` and read back its [`Head`]. The handler runs one command at a time, so no
     /// other command sees the paste between the two steps.
@@ -41,156 +121,107 @@ impl Handler {
     /// An expired paste is [`Error::NotFound`]. Unlike [`super::Database::get`], this never
     /// deletes anything, so it never consumes a burn-after-reading paste.
     pub(super) fn head(&self, id: Id, with_data: bool) -> super::HeadResult {
-        let (head, data, expired) = self.conn.query_row(
-            "SELECT e.uid, e.title, e.extension, e.nonce IS NOT NULL,
-                    COALESCE(e.burn_after_reading, 0),
-                    strftime('%Y-%m-%dT%H:%M:%SZ', e.expires),
-                    COALESCE(e.expires < datetime('now'), 0),
-                    r.version, r.version_id, CASE WHEN ?2 THEN r.data END
-             FROM entries e JOIN revisions r ON r.entry_id = e.id
-             WHERE e.id = ?1
-             ORDER BY r.version DESC
-             LIMIT 1",
-            params![id.to_i64(), with_data],
-            |row| {
-                let version_id = <[u8; 32]>::try_from(row.get::<_, Vec<u8>>(8)?.as_slice())
-                    .map_err(|err| {
-                        rusqlite::Error::FromSqlConversionFailure(
-                            8,
-                            rusqlite::types::Type::Blob,
-                            Box::new(err),
-                        )
-                    })?;
+        head_on(&self.conn, id, with_data)
+    }
 
-                let head = Head {
-                    id,
-                    uid: row.get(0)?,
-                    title: row.get(1)?,
-                    extension: row.get(2)?,
-                    encrypted: row.get(3)?,
-                    burn_after_reading: row.get(4)?,
-                    expires_at: row.get(5)?,
-                    version: row.get(7)?,
-                    version_id: VersionId::from_bytes(version_id),
-                };
-
-                Ok((head, row.get(9)?, row.get::<_, bool>(6)?))
-            },
-        )?;
-
-        if expired {
+    /// Read the head of `id` with its stored bytes and delete the paste, in one transaction that
+    /// takes the write lock before the read. Of two consumers of the same paste, on this handler
+    /// or on another connection to the same file, exactly one gets it and the other
+    /// [`Error::NotFound`].
+    pub(super) fn consume(&mut self, id: Id) -> Result<(Head, Stored), Error> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (head, stored) = head_on(&tx, id, true)?;
+        if tx.execute("DELETE FROM entries WHERE id = ?1", params![id.to_i64()])? == 0 {
             return Err(Error::NotFound);
         }
+        tx.commit()?;
+        Ok((head, stored.ok_or(Error::NotFound)?))
+    }
 
-        Ok((head, data))
+    /// One page of the unexpired pastes owned by any of `uids`, newest first by
+    /// `(created_at, id)`, pastes without `created_at` last. `marker` is the last id of the
+    /// previous page; one that is not an unexpired paste of `uids` is [`Error::InvalidMarker`].
+    pub(super) fn list_for(
+        &self,
+        uids: &[i64],
+        marker: Option<Id>,
+        limit: usize,
+    ) -> Result<ListPage, Error> {
+        const UNEXPIRED: &str = "NOT COALESCE(e.expires < datetime('now'), 0)";
+
+        if uids.is_empty() {
+            return Ok(ListPage {
+                heads: Vec::new(),
+                more: false,
+            });
+        }
+
+        // `?1` is the marker and `?2` the `with_data` flag of `HEAD_COLUMNS`; the uids start at
+        // `?3`.
+        let owned = (3..uids.len() + 3)
+            .map(|n| format!("?{n}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut params = vec![Value::Null, Value::from(false)];
+        params.extend(uids.iter().copied().map(Value::from));
+
+        let after = match marker {
+            None => String::from("1"),
+            Some(marker) => {
+                params[0] = Value::from(marker.to_i64());
+                let created_at: Option<String> = self
+                    .conn
+                    .query_row(
+                        &format!(
+                            "SELECT e.created_at FROM entries e
+                             WHERE e.id = ?1 AND e.uid IN ({owned}) AND {UNEXPIRED}"
+                        ),
+                        params_from_iter(&params),
+                        |row| row.get(0),
+                    )
+                    .map_err(|err| match err {
+                        rusqlite::Error::QueryReturnedNoRows => Error::InvalidMarker,
+                        err => err.into(),
+                    })?;
+
+                match created_at {
+                    // Rows after the marker: older, as old with a smaller id, or undated.
+                    Some(created_at) => {
+                        params.push(Value::from(created_at));
+                        let at = params.len();
+                        format!(
+                            "(e.created_at IS NULL OR e.created_at < ?{at}
+                              OR (e.created_at = ?{at} AND e.id < ?1))"
+                        )
+                    }
+                    None => String::from("(e.created_at IS NULL AND e.id < ?1)"),
+                }
+            }
+        };
+
+        let fetch = limit + 1;
+        let mut heads = self
+            .conn
+            .prepare(&format!(
+                "SELECT {HEAD_COLUMNS}
+                 FROM entries e JOIN revisions r ON r.entry_id = e.id
+                     AND r.version = (SELECT MAX(version) FROM revisions WHERE entry_id = e.id)
+                 WHERE e.uid IN ({owned}) AND {UNEXPIRED} AND {after}
+                 ORDER BY e.created_at DESC NULLS LAST, e.id DESC
+                 LIMIT {fetch}"
+            ))?
+            .query_map(params_from_iter(&params), |row| {
+                head_from_row(row).map(|(head, _, _)| head)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let more = heads.len() > limit;
+        heads.truncate(limit);
+        Ok(ListPage { heads, more })
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use std::num::NonZeroU32;
-
-    use crate::db::{Database, Error, Open, read, write};
-    use crate::revision::VersionId;
-
-    fn new_db() -> Result<Database, Box<dyn std::error::Error>> {
-        let (db, handler) = Database::new(Open::Memory)?;
-        tokio::spawn(handler);
-        Ok(db)
-    }
-
-    #[tokio::test]
-    async fn create_returns_first_version() -> Result<(), Box<dyn std::error::Error>> {
-        let db = new_db()?;
-
-        let head = db
-            .create(write::Entry {
-                text: "hello".to_string(),
-                extension: Some("md".to_string()),
-                title: Some("Title".to_string()),
-                uid: Some(7),
-                expires: NonZeroU32::new(3600),
-                ..Default::default()
-            })
-            .await?;
-
-        assert_eq!(head.uid, Some(7));
-        assert_eq!(head.extension.as_deref(), Some("md"));
-        assert_eq!(head.title.as_deref(), Some("Title"));
-        assert!(!head.encrypted);
-        assert!(!head.burn_after_reading);
-        assert_eq!(head.version, 1);
-        let expires_at = head.expires_at.as_deref().ok_or("no expiry")?;
-        assert_eq!(expires_at.len(), "2026-11-21T13:00:00Z".len());
-        assert!(expires_at.ends_with('Z'));
-
-        let (again, data) = db.head_with_data(head.id).await?;
-        assert_eq!(again.version_id, head.version_id);
-        assert_eq!(
-            head.version_id,
-            VersionId::compute(None, &data, Some("Title"))
-        );
-        assert_eq!(read::decompress(data).await?, "hello");
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn never_expiring_paste_has_no_expiry() -> Result<(), Box<dyn std::error::Error>> {
-        let db = new_db()?;
-
-        let head = db
-            .create(write::Entry {
-                text: "x".to_string(),
-                password: Some("secret".to_string()),
-                burn_after_reading: Some(true),
-                ..Default::default()
-            })
-            .await?;
-
-        assert!(head.expires_at.is_none());
-        assert!(head.encrypted);
-        assert!(head.burn_after_reading);
-        assert!(head.extension.is_none());
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn head_never_consumes_burn_paste() -> Result<(), Box<dyn std::error::Error>> {
-        let db = new_db()?;
-
-        let head = db
-            .create(write::Entry {
-                text: "secret".to_string(),
-                burn_after_reading: Some(true),
-                ..Default::default()
-            })
-            .await?;
-
-        db.head(head.id).await?;
-        db.head_with_data(head.id).await?;
-        assert_eq!(db.get(head.id, None).await?.unwrap_inner().text, "secret");
-        assert!(matches!(db.head(head.id).await, Err(Error::NotFound)));
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn expired_paste_is_not_found() -> Result<(), Box<dyn std::error::Error>> {
-        let db = new_db()?;
-
-        let head = db
-            .create(write::Entry {
-                text: "x".to_string(),
-                expires: NonZeroU32::new(1),
-                ..Default::default()
-            })
-            .await?;
-
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        assert!(matches!(db.head(head.id).await, Err(Error::NotFound)));
-
-        Ok(())
-    }
-}
+mod tests;

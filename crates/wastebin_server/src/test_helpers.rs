@@ -8,6 +8,7 @@ use reqwest::RequestBuilder;
 use tokio::net::TcpListener;
 
 use crate::cache::Cache;
+use crate::client::{Peer, RateLimit, TrustedProxies};
 use crate::page;
 
 use wastebin_core::crypto::KdfLimit;
@@ -27,6 +28,8 @@ pub(crate) struct StoreCookies(pub bool);
 pub(crate) struct Settings {
     pub kdf: KdfLimit,
     pub timeout: Duration,
+    pub rate: RateLimit,
+    pub proxies: TrustedProxies,
 }
 
 impl Default for Settings {
@@ -34,6 +37,8 @@ impl Default for Settings {
         Self {
             kdf: KdfLimit::default(),
             timeout: Duration::from_secs(30),
+            rate: RateLimit::default(),
+            proxies: TrustedProxies::default(),
         }
     }
 }
@@ -62,6 +67,8 @@ impl Client {
             key,
             page,
             highlighter: Arc::new(Highlighter::default()),
+            rate: settings.rate,
+            proxies: Arc::new(settings.proxies),
         };
 
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -73,7 +80,8 @@ impl Client {
         tokio::spawn(handler);
 
         tokio::spawn(async move {
-            let app = crate::make_app(state, settings.timeout, 1024 * 1024);
+            let app = crate::make_app(state, settings.timeout, 1024 * 1024)
+                .into_make_service_with_connect_info::<Peer>();
 
             axum::serve(listener, app)
                 .with_graceful_shutdown(crate::shutdown_signal())

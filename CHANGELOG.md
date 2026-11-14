@@ -19,10 +19,14 @@ prerelease and the image tag `0.1.0-beta.1`.
   burn-after-reading paste. A paste's versions are deleted with it. The
   database file grows by about the size of the stored pastes, and an older
   executable refuses the migrated database, so a rollback restores the backup.
-- The `/v1` JSON API, first operations: `GET /v1`, `POST /v1/pastes`,
-  `GET /v1/pastes/{id}`, `DELETE /v1/pastes/{id}` and
-  `GET /v1/pastes/{id}/content` (plain pastes; encrypted and
-  burn-after-reading pastes answer 409 and are never consumed). Every `/v1`
+- The `/v1` JSON API, first operations: `GET /v1`, `POST /v1/pastes`
+  (`createPaste`), `GET /v1/pastes` (`listPastes`: the caller's unexpired
+  pastes, newest first, paged by `marker`), `GET /v1/pastes/{id}`,
+  `DELETE /v1/pastes/{id}`, `GET /v1/pastes/{id}/content` (plain pastes;
+  encrypted and burn-after-reading pastes answer 409 and are never consumed)
+  and `POST /v1/pastes/{id}/content` (`readContent`: the password and the burn
+  confirmation in the body; a burn-after-reading paste is consumed once, after
+  a correct password and `confirm_burn`). Every `/v1`
   response carries `X-Request-Id` and `Cache-Control: no-store`, and every
   `/v1` error, the framework's included, uses one JSON shape; a request that
   outlives `WASTEBIN_HTTP_TIMEOUT` is 408 with type `timeout`.
@@ -32,6 +36,14 @@ prerelease and the image tag `0.1.0-beta.1`.
   a password) takes one of `WASTEBIN_KDF_CONCURRENCY` slots (default 2, about
   128 MiB of Argon2 memory). A request that finds no free slot within 1 s is
   429 with `Retry-After: 1`, and nothing is derived, written or consumed.
+- Each client may start `WASTEBIN_KDF_RATE` key derivations per minute, with a
+  burst of the same number (default 10). Past that, `/v1`, the legacy routes
+  and the HTML password form answer 429 with `Retry-After` set to the seconds
+  until the next derivation; a read of a plain paste never counts. The client
+  is the connection's address, or `CF-Connecting-IP` when the connection comes
+  from a range in `WASTEBIN_TRUSTED_PROXIES` (comma-separated CIDR ranges or
+  addresses, `unix` for a Unix-socket peer; empty by default). An IPv6 client
+  counts by its /64, and `X-Forwarded-For` is never read.
 
 ### Changed
 

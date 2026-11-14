@@ -44,7 +44,9 @@ pub(crate) const DOCUMENT_PATH: &str =
         crate::v1::pastes::create,
         crate::v1::pastes::show,
         crate::v1::pastes::delete,
-        crate::v1::pastes::get_content,
+        crate::v1::content::get_content,
+        crate::v1::list::list,
+        crate::v1::content::read_content,
     ),
     components(schemas(ErrorDocument, pending::schemas::EntityTag, pending::schemas::IfMatchList, pending::schemas::Slug, pending::schemas::EntryName)),
 )]
@@ -52,9 +54,7 @@ pub(crate) struct Routed;
 
 #[derive(OpenApi)]
 #[openapi(paths(
-    pending::list_pastes,
     pending::update_paste,
-    pending::read_content,
     pending::replace_content,
     pending::list_versions,
     pending::read_version_content,

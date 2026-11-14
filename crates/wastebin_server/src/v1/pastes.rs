@@ -10,21 +10,22 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum_extra::extract::SignedCookieJar;
 
-use wastebin_core::db::{Head, read, write};
+use wastebin_core::db::{Head, write};
 use wastebin_core::expiration::Expiration;
 use wastebin_core::id::Id;
 
 use crate::AppState;
 use crate::cache::valid_extension;
+use crate::client::ClientKey;
 use crate::handlers::extract::sign_owner_token;
 use crate::handlers::uid_cookie;
+use crate::service;
 use crate::v1::auth::{self, Identity};
 #[cfg(test)]
 use crate::v1::contract::responses::{
-    BadRequest, Forbidden, NotFound, PayloadTooLarge, ReadPrecondition, TooManyRequests,
-    Unauthorized,
+    BadRequest, Forbidden, NotFound, PayloadTooLarge, TooManyRequests, Unauthorized,
 };
-use crate::v1::error::{ApiError, ErrorType, V1Json};
+use crate::v1::error::{ApiError, V1Json};
 use crate::v1::model::{
     Paste, PasteCreate, PasteCreateRequest, PasteCreated, PasteCreatedDocument, PasteDocument,
     VERSION_DOCUMENT, VersionDocument,
@@ -66,10 +67,11 @@ pub(crate) async fn get_version() -> Json<VersionDocument> {
 /// - Any other create (no `Origin`, as from curl and gzpaste) gets
 ///   `owner_token` in the body, once, and no cookie.
 ///
-/// A create that sets `password` derives a key, so it takes a slot of the
-/// shared key-derivation limit; when none comes free within the server's wait
-/// it is 429 with `Retry-After`, and nothing is created. A create without a
-/// password never counts. The general create rate is the proxy's.
+/// A create that sets `password` derives a key, so it counts against the
+/// client's derivation rate and takes a slot of the shared key-derivation
+/// limit; past either it is 429 with `Retry-After`, and nothing is created. A
+/// create without a password never counts. The general create rate is the
+/// proxy's.
 #[cfg_attr(test, utoipa::path(
     post,
     path = "/v1/pastes",
@@ -97,29 +99,26 @@ pub(crate) async fn get_version() -> Json<VersionDocument> {
 ))]
 pub(crate) async fn create(
     State(state): State<AppState>,
+    client: ClientKey,
     headers: HeaderMap,
     body: Result<V1Json<PasteCreateRequest>, ApiError>,
 ) -> Result<Response, ApiError> {
     // Credentials and `Origin` are answered before the body.
     let caller = auth::caller(&headers, &state.key, &state.page.base_url, true)?;
     let V1Json(PasteCreateRequest { paste }) = body?;
-    let mut entry = validate(paste, &state.page.expirations)?;
+    let entry = validate(paste, &state.page.expirations)?;
 
-    let (uid, owner_token, cookie) = match caller.identity {
-        Identity::Token(uid) => (uid, None, None),
-        Identity::Cookie(uids) => (uids[0], None, None),
-        Identity::Anonymous => {
-            let uid = state.db.next_uid().await?;
-            if caller.browser {
-                (uid, None, Some(uid_cookie(&[uid])))
-            } else {
-                (uid, Some(sign_owner_token(&state.key, uid)), None)
-            }
-        }
+    let owner = match caller.identity {
+        Identity::Token(uid) => Some(uid),
+        Identity::Cookie(uids) => uids.first().copied(),
+        Identity::Anonymous => None,
     };
-
-    entry.uid = Some(uid);
-    let head = state.db.create(entry).await?;
+    let (head, uid) = service::create(&state, client, entry, owner).await?;
+    let (owner_token, cookie) = match owner {
+        Some(_) => (None, None),
+        None if caller.browser => (None, Some(uid_cookie(&[uid]))),
+        None => (Some(sign_owner_token(&state.key, uid)), None),
+    };
     let location = HeaderValue::try_from(format!("/v1/pastes/{}", head.id))
         .map_err(|_| ApiError::internal())?;
     let body = PasteCreatedDocument {
@@ -273,73 +272,13 @@ pub(crate) async fn delete(
     }
 }
 
-/// Read the content of a plain paste
-///
-/// Returns the raw text of a paste that is neither encrypted nor
-/// burn-after-reading. For an encrypted paste (burn or not) it answers 409
-/// `password_required`; for a burn-after-reading paste, 409
-/// `confirmation_required`. It consumes nothing.
-#[cfg_attr(test, utoipa::path(
-    get,
-    path = "/v1/pastes/{id}/content",
-    tag = "content",
-    operation_id = "getContent",
-    extensions(("x-phase" = json!("P1"))),
-    security(()),
-    responses(
-        (status = 200, description = "The current content, UTF-8.", body = String,
-            content_type = "text/plain; charset=utf-8"),
-        (status = 404, response = NotFound),
-        (status = 409, response = ReadPrecondition),
-    ),
-))]
-pub(crate) async fn get_content(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<Response, ApiError> {
-    let id = paste_id(&id)?;
-    // The flags come first, so a 409 never copies the stored bytes.
-    let head = state.db.head(id).await?;
-
-    if head.encrypted {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            ErrorType::PasswordRequired,
-            "the paste is encrypted; read it with POST /v1/pastes/{id}/content and its password",
-        ));
-    }
-
-    if head.burn_after_reading {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            ErrorType::ConfirmationRequired,
-            "confirm to read; the paste is deleted after reading",
-        ));
-    }
-
-    // Both flags are fixed at creation, so they still hold for this second read; its head
-    // carries the version the content belongs to.
-    let (head, data) = state.db.head_with_data(id).await?;
-    let text = read::decompress(data).await?;
-    let content_type = HeaderValue::from_static("text/plain; charset=utf-8");
-
-    Ok((
-        [
-            (header::CONTENT_TYPE, content_type),
-            (header::ETAG, etag(&head)),
-        ],
-        text,
-    )
-        .into_response())
-}
-
 /// A path id that does not parse names no paste: 404, like a missing one.
-fn paste_id(id: &str) -> Result<Id, ApiError> {
+pub(super) fn paste_id(id: &str) -> Result<Id, ApiError> {
     id.parse().map_err(|_| ApiError::not_found())
 }
 
 /// Strong entity tag of the head version, `"<version_id>"`.
-fn etag(head: &Head) -> HeaderValue {
+pub(super) fn etag(head: &Head) -> HeaderValue {
     HeaderValue::try_from(format!("\"{}\"", head.version_id))
         .unwrap_or_else(|_| HeaderValue::from_static("\"\""))
 }

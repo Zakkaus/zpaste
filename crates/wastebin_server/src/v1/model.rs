@@ -2,13 +2,20 @@
 //! contract is its own closed struct, never the storage struct, so a field the contract does not
 //! list cannot leak.
 
-use serde::{Deserialize, Serialize, Serializer};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url::Url;
 use utoipa::openapi::RefOr;
 use utoipa::openapi::schema::{ObjectBuilder, Schema, Type};
 use utoipa::{PartialSchema, ToSchema};
 
 use wastebin_core::db::Head;
+
+mod content;
+mod list;
+
+pub(crate) use content::{ContentDocument, ContentReadRequest};
+pub(crate) use list::PasteListDocument;
 
 /// A boolean that is always the same value, schema `enum: [<value>]` (utoipa has no `const`).
 macro_rules! constant_bool {
@@ -32,6 +39,16 @@ macro_rules! constant_bool {
         }
 
         impl ToSchema for $name {}
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                if bool::deserialize(deserializer)? == $value {
+                    Ok(Self)
+                } else {
+                    Err(D::Error::custom(concat!("expected ", stringify!($value))))
+                }
+            }
+        }
     };
 }
 
@@ -117,10 +134,6 @@ impl std::fmt::Debug for OwnerToken {
 
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
-#[allow(
-    dead_code,
-    reason = "`next` belongs to the owner list of the next slice"
-)]
 pub(crate) enum LinkRel {
     #[serde(rename = "self")]
     Self_,

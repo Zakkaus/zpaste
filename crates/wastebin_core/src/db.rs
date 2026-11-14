@@ -11,7 +11,7 @@ use crate::crypto::{self, KdfLimit, Password};
 use crate::expiration::Expiration;
 use crate::id::Id;
 use crate::revision;
-pub use head::Head;
+pub use head::{Head, ListPage, Stored};
 use read::{DatabaseEntry, ListEntry, Metadata};
 
 mod head;
@@ -31,6 +31,8 @@ pub enum Error {
     NoPassword,
     #[error("entry not found")]
     NotFound,
+    #[error("marker is not an unexpired paste of the caller")]
+    InvalidMarker,
     #[error("join error: {0}")]
     Join(#[from] tokio::task::JoinError),
     #[error("crypto error: {0}")]
@@ -63,7 +65,7 @@ struct Handler {
 }
 
 /// A [`Head`] and, when asked for, the stored bytes of its version.
-type HeadResult = Result<(Head, Option<Vec<u8>>), Error>;
+type HeadResult = Result<(Head, Option<Stored>), Error>;
 
 /// Commands issued to the database handler and corresponding to [`Database`] calls.
 enum Command {
@@ -109,6 +111,16 @@ enum Command {
         id: Id,
         with_data: bool,
         result: oneshot::Sender<HeadResult>,
+    },
+    Consume {
+        id: Id,
+        result: oneshot::Sender<Result<(Head, Stored), Error>>,
+    },
+    ListFor {
+        uids: Vec<i64>,
+        marker: Option<Id>,
+        limit: usize,
+        result: oneshot::Sender<Result<ListPage, Error>>,
     },
 }
 
@@ -274,6 +286,8 @@ pub mod read {
         pub expiration: Option<Expiration>,
         /// Entry will be deleted the next time it is fetched via [`Database::get`].
         pub must_be_deleted: bool,
+        /// Whether the content is encrypted, so reading it derives a key.
+        pub encrypted: bool,
     }
 
     /// Potentially deleted or non-existent expired entry.
@@ -478,6 +492,17 @@ impl Handler {
                 } => result
                     .send(self.head(id, with_data))
                     .map_err(|_| Error::ResultSendError),
+                Command::Consume { id, result } => result
+                    .send(self.consume(id))
+                    .map_err(|_| Error::ResultSendError),
+                Command::ListFor {
+                    uids,
+                    marker,
+                    limit,
+                    result,
+                } => result
+                    .send(self.list_for(&uids, marker, limit))
+                    .map_err(|_| Error::ResultSendError),
             };
 
             if let Err(err) = result {
@@ -547,7 +572,7 @@ impl Handler {
 
     fn get_metadata(&self, id: Id) -> Result<Metadata, Error> {
         let metadata = self.conn.query_row(
-            "SELECT uid, title, CAST(ROUND((julianday(expires) - julianday('now')) * 86400) AS INTEGER), burn_after_reading FROM entries WHERE id=?1",
+            "SELECT uid, title, CAST(ROUND((julianday(expires) - julianday('now')) * 86400) AS INTEGER), burn_after_reading, nonce IS NOT NULL FROM entries WHERE id=?1",
             params![id.to_i64()],
             |row| {
                 let expiration = row.get::<_, Option<i64>>(2)?
@@ -560,6 +585,7 @@ impl Handler {
                     title: row.get::<_, Option<String>>(1)?,
                     expiration,
                     must_be_deleted: row.get::<_, Option<bool>>(3)?.unwrap_or(false),
+                    encrypted: row.get(4)?,
                 })
             }
         )?;
@@ -736,8 +762,69 @@ impl Database {
     /// Get the [`Head`] of `id` and the stored bytes of its head version (compressed, and
     /// ciphertext when encrypted). Never deletes or consumes the paste.
     pub async fn head_with_data(&self, id: Id) -> Result<(Head, Vec<u8>), Error> {
-        let (head, data) = self.head_command(id, true).await?;
-        Ok((head, data.unwrap_or_default()))
+        let (head, stored) = self.head_with_stored(id).await?;
+        Ok((head, stored.data))
+    }
+
+    /// Get the [`Head`] of `id` and the stored bytes and nonce of its head version. Never deletes
+    /// or consumes the paste.
+    pub async fn head_with_stored(&self, id: Id) -> Result<(Head, Stored), Error> {
+        let (head, stored) = self.head_command(id, true).await?;
+        Ok((head, stored.ok_or(Error::NotFound)?))
+    }
+
+    /// Delete `id` and return its [`Head`] and stored bytes, atomically: of concurrent consumers
+    /// of one paste exactly one gets it, the others [`Error::NotFound`]. An expired paste is
+    /// [`Error::NotFound`] and stays for the purge.
+    pub async fn consume(&self, id: Id) -> Result<(Head, Stored), Error> {
+        let (result, command_result) = oneshot::channel();
+        self.sender
+            .send(Command::Consume { id, result })
+            .await
+            .map_err(|_| Error::SendError)?;
+        command_result.await?
+    }
+
+    /// The text of `stored`: decrypted with `password` when it is encrypted, with a slot of this
+    /// database's [`KdfLimit`] for the key derivation, then decompressed. Reads and deletes
+    /// nothing, so verifying a password never consumes a paste. A plain version derives nothing
+    /// and ignores `password`.
+    pub async fn open(&self, stored: Stored, password: Option<Password>) -> Result<String, Error> {
+        let data = match (stored.nonce, password) {
+            (None, _) => stored.data,
+            (Some(_), None) => return Err(Error::NoPassword),
+            (Some(nonce), Some(password)) => {
+                let permit = self.kdf.acquire().await?;
+                crypto::Encrypted::new(stored.data, nonce)
+                    .decrypt(password, permit)
+                    .await?
+            }
+        };
+
+        read::decompress(data).await
+    }
+
+    /// One page of the unexpired pastes owned by any of `uids`; see [`ListPage`]. Order is newest
+    /// first by `(created_at, id)`, pastes from before the `created_at` column last. `marker`, the
+    /// last id of the previous page, must be an unexpired paste of `uids`, or the call is
+    /// [`Error::InvalidMarker`], whatever the reason.
+    pub async fn list_for(
+        &self,
+        uids: &[i64],
+        marker: Option<Id>,
+        limit: usize,
+    ) -> Result<ListPage, Error> {
+        let (result, command_result) = oneshot::channel();
+        self.sender
+            .send(Command::ListFor {
+                uids: uids.to_vec(),
+                marker,
+                limit,
+                result,
+            })
+            .await
+            .map_err(|_| Error::SendError)?;
+        command_result.await?
     }
 
     async fn head_command(&self, id: Id, with_data: bool) -> HeadResult {

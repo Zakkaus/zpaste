@@ -91,3 +91,22 @@ pub fn make_error(
         },
     )
 }
+
+/// [`make_error`] as a response, with `Retry-After` when the per-client rate refused the request.
+pub fn make_error_response(
+    error: crate::Error,
+    page: Page,
+    theme: Option<Theme>,
+    lang: Lang,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    let retry_after = error.retry_after();
+    let mut response = make_error(error, page, theme, lang).into_response();
+    if let Some(retry_after) = retry_after {
+        response
+            .headers_mut()
+            .insert(axum::http::header::RETRY_AFTER, retry_after);
+    }
+    response
+}

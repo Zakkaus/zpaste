@@ -13,11 +13,18 @@ use utoipa::ToSchema;
 
 use wastebin_core::{crypto, db};
 
+use crate::client::retry_after_secs;
+use crate::service::Failure;
+
 pub(crate) const REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 
 /// Challenge sent with a 401 for a missing or failed owner token.
 pub(crate) const BEARER_CHALLENGE: HeaderValue =
     HeaderValue::from_static("Bearer realm=\"zpaste\"");
+
+/// Challenge sent with a 401 for a wrong paste password (decision D1).
+pub(crate) const PASSWORD_CHALLENGE: HeaderValue =
+    HeaderValue::from_static("Paste-Password realm=\"zpaste\"");
 
 /// Machine-readable kind. The plan names `version_conflict`,
 /// `password_required` and `confirmation_required`; the rest are this
@@ -120,6 +127,18 @@ impl ApiError {
         }
     }
 
+    /// The client spent its rate of key derivations; a token is free again after `wait`.
+    pub(crate) fn rate_limited_for(wait: std::time::Duration) -> Self {
+        Self {
+            header: Some((header::RETRY_AFTER, retry_after_secs(wait).into())),
+            ..Self::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                ErrorType::RateLimited,
+                "too many password attempts from this client; retry after the Retry-After delay",
+            )
+        }
+    }
+
     pub(crate) fn forbidden(message: impl Into<String>) -> Self {
         Self::new(StatusCode::FORBIDDEN, ErrorType::Forbidden, message)
     }
@@ -177,6 +196,35 @@ impl ApiError {
         };
 
         Some(Self::new(status, kind, message))
+    }
+}
+
+impl From<Failure> for ApiError {
+    fn from(failure: Failure) -> Self {
+        match failure {
+            Failure::NotFound => Self::not_found(),
+            Failure::PasswordRequired => Self::new(
+                StatusCode::CONFLICT,
+                ErrorType::PasswordRequired,
+                "the paste is encrypted; send its password",
+            ),
+            Failure::WrongPassword => Self {
+                header: Some((header::WWW_AUTHENTICATE, PASSWORD_CHALLENGE)),
+                ..Self::new(
+                    StatusCode::UNAUTHORIZED,
+                    ErrorType::WrongPassword,
+                    "wrong password",
+                )
+            },
+            Failure::ConfirmationRequired => Self::new(
+                StatusCode::CONFLICT,
+                ErrorType::ConfirmationRequired,
+                "the paste is deleted after reading; send confirm_burn: true to read it",
+            ),
+            Failure::RateLimited(wait) => Self::rate_limited_for(wait),
+            Failure::Busy => Self::rate_limited(),
+            Failure::Database(err) => err.into(),
+        }
     }
 }
 

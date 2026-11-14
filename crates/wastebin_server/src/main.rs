@@ -1,10 +1,12 @@
 mod assets;
 mod cache;
+mod client;
 mod env;
 mod errors;
 mod handlers;
 mod i18n;
 mod page;
+mod service;
 #[cfg(test)]
 mod test_helpers;
 mod v1;
@@ -51,11 +53,20 @@ pub(crate) struct AppState {
     key: Key,
     page: Page,
     highlighter: Highlighter,
+    /// Per-client rate of password key derivations.
+    rate: client::RateLimit,
+    proxies: Arc<client::TrustedProxies>,
 }
 
 impl FromRef<AppState> for Key {
     fn from_ref(state: &AppState) -> Self {
         state.key.clone()
+    }
+}
+
+impl FromRef<AppState> for client::RateLimit {
+    fn from_ref(state: &AppState) -> Self {
+        state.rate.clone()
     }
 }
 
@@ -135,7 +146,8 @@ async fn handle_service_errors(
         StatusCode::TOO_MANY_REQUESTS => {
             response
                 .headers_mut()
-                .insert(RETRY_AFTER, errors::RETRY_AFTER);
+                .entry(RETRY_AFTER)
+                .or_insert(errors::RETRY_AFTER);
             response
         }
         StatusCode::PAYLOAD_TOO_LARGE => (
@@ -263,6 +275,8 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
     let base_url = env::base_url()?;
     let timeout = env::http_timeout()?;
     let kdf_limit = env::kdf_limit()?;
+    let rate = env::kdf_rate()?;
+    let proxies = Arc::new(env::trusted_proxies()?);
     let expirations = env::expiration_set()?;
     let theme = env::theme()?;
     let title = env::title();
@@ -290,9 +304,12 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
         key,
         page,
         highlighter,
+        rate,
+        proxies,
     };
 
-    let app = make_app(state, timeout, max_body_size);
+    let app = make_app(state, timeout, max_body_size)
+        .into_make_service_with_connect_info::<client::Peer>();
 
     let serve = async {
         match socket_type {

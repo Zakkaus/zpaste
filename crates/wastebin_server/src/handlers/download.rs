@@ -5,34 +5,35 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use axum_extra::headers::HeaderValue;
 
-use crate::Page;
 use crate::cache::Key;
+use crate::client::ClientKey;
 use crate::handlers::NoStore;
 use crate::handlers::extract::{Password, Theme};
-use crate::handlers::html::{ErrorResponse, FormAction, PasswordInput, make_error};
+use crate::handlers::html::{FormAction, PasswordInput, make_error_response};
 use crate::i18n::Lang;
-use wastebin_core::db::read::{Data, Entry};
-use wastebin_core::db::{self, Database};
+use crate::service::{self, Content, Failure};
+use crate::{AppState, Page};
 
-/// GET handler for raw content of a paste.
+/// GET handler for downloading a paste, an adapter over [`service::read`] like `/raw`.
 pub async fn get(
     Path(id): Path<String>,
-    State(db): State<Database>,
+    State(state): State<AppState>,
     State(page): State<Page>,
+    client: ClientKey,
     theme: Option<Theme>,
     lang: Lang,
     password: Option<Password>,
-) -> Result<Response, ErrorResponse> {
+) -> Response {
     async {
         let key: Key = id.parse()?;
         let password = password.map(|Password(password)| password);
 
-        match db.get(key.id, password).await {
-            Ok(Entry::Regular(data) | Entry::Burned(data)) => {
-                Ok(get_download(&key, data).into_response())
+        match service::read(&state, client, key.id, password, true).await {
+            Ok(content) if content.head.encrypted => {
+                Ok(get_download(&key, content).into_response().no_store())
             }
-            Ok(Entry::Encrypted(data)) => Ok(get_download(&key, data).into_response().no_store()),
-            Err(db::Error::NoPassword) => Ok(PasswordInput {
+            Ok(content) => Ok(get_download(&key, content).into_response()),
+            Err(Failure::PasswordRequired) => Ok(PasswordInput {
                 page: page.clone(),
                 theme: theme.clone(),
                 lang,
@@ -44,7 +45,7 @@ pub async fn get(
         }
     }
     .await
-    .map_err(|err| make_error(err, page, theme, lang))
+    .unwrap_or_else(|err: crate::Error| make_error_response(err, page, theme, lang))
 }
 
 fn make_content_disposition(filename: &str) -> HeaderValue {
@@ -61,8 +62,8 @@ fn make_content_disposition(filename: &str) -> HeaderValue {
     HeaderValue::try_from(value).unwrap_or_else(|_| HeaderValue::from_static("attachment"))
 }
 
-fn get_download(key: &Key, data: Data) -> impl IntoResponse {
-    let filename = data.metadata.title.unwrap_or_else(|| key.to_string());
+fn get_download(key: &Key, Content { head, text }: Content) -> impl IntoResponse {
+    let filename = head.title.unwrap_or_else(|| key.to_string());
 
     let content_type = "text; charset=utf-8";
     let content_disposition = make_content_disposition(&filename);
@@ -72,7 +73,7 @@ fn get_download(key: &Key, data: Data) -> impl IntoResponse {
             (header::CONTENT_TYPE, HeaderValue::from_static(content_type)),
             (header::CONTENT_DISPOSITION, content_disposition),
         ],
-        data.text,
+        text,
     )
 }
 

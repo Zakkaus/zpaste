@@ -1,17 +1,19 @@
 use std::num::NonZeroU32;
 
 use axum::extract::{Form, State};
-use axum::response::{IntoResponse, Redirect};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum_extra::extract::cookie::SignedCookieJar;
 use serde::{Deserialize, Serialize};
 
-use crate::Page;
 use crate::cache::valid_extension;
+use crate::client::ClientKey;
 use crate::handlers::extract::{Theme, Uids};
-use crate::handlers::html::make_error;
+use crate::handlers::html::make_error_response;
 use crate::handlers::uid_cookie;
 use crate::i18n::Lang;
-use wastebin_core::db::{Database, write};
+use crate::service;
+use crate::{AppState, Page};
+use wastebin_core::db::write;
 use wastebin_core::id;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -46,64 +48,63 @@ impl From<Entry> for write::Entry {
     }
 }
 
+/// The form create, an adapter over [`service::create`].
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one extractor per request part, as axum takes them"
+)]
 pub async fn post<E: std::fmt::Debug>(
     State(page): State<Page>,
-    State(db): State<Database>,
+    State(state): State<AppState>,
+    client: ClientKey,
     jar: SignedCookieJar,
     uids: Option<Uids>,
     theme: Option<Theme>,
     lang: Lang,
     entry: Result<Form<Entry>, E>,
-) -> Result<(SignedCookieJar, Redirect), impl IntoResponse> {
+) -> Response {
     let Ok(Form(entry)) = entry else {
-        return Err(make_error(crate::Error::MalformedForm, page, theme, lang));
+        return make_error_response(crate::Error::MalformedForm, page, theme, lang);
     };
 
     if let Some(extension) = &entry.extension
         && !valid_extension(extension)
     {
-        return Err(make_error(
+        return make_error_response(
             crate::Error::Id(id::Error::IllegalCharacters),
             page,
             theme,
             lang,
-        ));
+        );
     }
 
-    let mut entry: write::Entry = entry.into();
+    let entry: write::Entry = entry.into();
     let mut uids = uids.map(|Uids(uids)| uids).unwrap_or_default();
 
     async {
-        // Pick the existing primary uid (first in the cookie list) or mint a new one.
-        // Re-set the cookie with the full list unchanged so claimed uids survive.
-        let primary = match uids.first().copied() {
-            Some(uid) => uid,
-            None => {
-                let uid = db.next_uid().await?;
-                uids.push(uid);
-                uid
-            }
+        // Create as the existing primary uid (first in the cookie list) or a new one. Re-set the
+        // cookie with the full list unchanged so claimed uids survive.
+        let (head, uid) = service::create(&state, client, entry, uids.first().copied()).await?;
+        if uids.is_empty() {
+            uids.push(uid);
+        }
+
+        let url_path = match &head.extension {
+            Some(extension) => format!("{}.{extension}", head.id),
+            None => head.id.to_string(),
         };
-
-        entry.uid = Some(primary);
-
-        let (id, entry) = db.insert(entry).await?;
-
-        let url = {
-            let url_path = id.to_url_path(&entry);
-            if entry.burn_after_reading.unwrap_or(false) {
-                format!("/burn/{url_path}")
-            } else {
-                format!("/{url_path}")
-            }
+        let url = if head.burn_after_reading {
+            format!("/burn/{url_path}")
+        } else {
+            format!("/{url_path}")
         };
 
         let cookie = uid_cookie(&uids);
 
-        Ok((jar.add(cookie), Redirect::to(&url)))
+        Ok((jar.add(cookie), Redirect::to(&url)).into_response())
     }
     .await
-    .map_err(|err| make_error(err, page, theme, lang))
+    .unwrap_or_else(|err: crate::Error| make_error_response(err, page, theme, lang))
 }
 
 #[cfg(test)]
