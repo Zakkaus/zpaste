@@ -295,7 +295,9 @@ pub(crate) async fn get_content(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Response, ApiError> {
-    let (head, data) = state.db.head_with_data(paste_id(&id)?).await?;
+    let id = paste_id(&id)?;
+    // The flags come first, so a 409 never copies the stored bytes.
+    let head = state.db.head(id).await?;
 
     if head.encrypted {
         return Err(ApiError::new(
@@ -313,6 +315,9 @@ pub(crate) async fn get_content(
         ));
     }
 
+    // Both flags are fixed at creation, so they still hold for this second read; its head
+    // carries the version the content belongs to.
+    let (head, data) = state.db.head_with_data(id).await?;
     let text = read::decompress(data).await?;
     let content_type = HeaderValue::from_static("text/plain; charset=utf-8");
 
