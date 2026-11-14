@@ -12,8 +12,11 @@
 // 390 and 1280 px, in the paste and in the committed Chinese fixtures, which have every role. The
 // Traditional fixture is marked zh-Hant and drawn with a Traditional Chinese face, the Simplified one
 // zh-Hans with a Simplified face, and an English paste keeps the page's language. The top bar's buttons
-// share one size and icon size. On a slow link and processor with a cold cache, the top bar and the title
-// row's actions paint at their final size and place from the first frame, and the page barely shifts.
+// share one size and icon size, and its logo is a link home named "Zpaste" at a fixed size that keeps
+// clear of them, the signet alone on the narrowest phones; the tab and touch icons the page links are in
+// the build. On a slow link and processor with a cold cache, the top bar's link and buttons and the
+// title row's actions paint at their final size and place from the first frame, and the page barely
+// shifts.
 // Copy puts the paste's exact text on the clipboard and says "Copied". The outline's landmarks have
 // distinct names and a closed drawer has none. Pastes past the render limits (renderPlan.ts) show as plain
 // text under a notice without blocking the page for long; a page with a cut-off or missing paste shows the
@@ -39,7 +42,14 @@ import {longMarkdown} from './longFixture.ts';
 import {TYPE_ROLES, readTypeScale} from './typeScale.ts';
 
 const DIST = process.env.ZPASTE_DIST ?? new URL('../dist/', import.meta.url).pathname;
-const TYPES: Record<string, string> = {'.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.woff': 'font/woff'};
+const TYPES: Record<string, string> = {
+  '.js': 'text/javascript',
+  '.css': 'text/css',
+  '.woff2': 'font/woff2',
+  '.woff': 'font/woff',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+};
 const SHOTS = [
   {name: '1280-light', width: 1280, height: 800, scheme: 'light'},
   {name: '390-dark', width: 390, height: 844, scheme: 'dark'},
@@ -109,9 +119,14 @@ const HEADER_HEIGHT = {wide: 256, narrow: 380};
  */
 const SLOW_LINK = {offline: false, latency: 562.5, downloadThroughput: 180_000, uploadThroughput: 84_375};
 const SLOW_CPU = 4;
+/**
+ * The top bar's logo (src/theme/brand.stylex.ts): its height, its width with the lettering and with the
+ * signet alone, the width below which only the signet shows, and the least gap before the top-bar buttons.
+ */
+const LOGO = {height: 40, width: 164, markWidth: 38, markOnlyBelow: 360, gap: 16};
 /** The largest cumulative layout shift the reading page may have while it loads. */
 const CLS_MAX = 0.01;
-/** The controls that must paint at their final size and place: the top bar's and the title row's. */
+/** Controls that must paint at their final size and place: the top bar's link and buttons, the title row's actions. */
 const STEADY_CONTROLS = `[role="banner"] :is(button, a), [role="group"][aria-label="${en['action.actions']}"] > *`;
 
 /**
@@ -398,6 +413,7 @@ async function checkWidthsAndTables(browser: Browser, url: string, name: string)
     await page.setViewportSize({width, height: 800});
     const overflow = await pageOverflow(page);
     check(overflow <= 0, `${name} ${width}px: the page scrolls sideways by ${overflow}px`);
+    await checkLogo(page, `${name} ${width}px`, width);
   }
   await page.setViewportSize({width: 390, height: 800});
   const boxes = await page.evaluate(() =>
@@ -599,6 +615,55 @@ async function checkActions(page: Page, name: string, wide: boolean, text: strin
 }
 
 /**
+ * The top bar starts with one link home named "Zpaste" that shows the logo at its fixed size (LOGO): the
+ * signet and the lettering, or the signet alone below LOGO.markOnlyBelow, starting where the title does
+ * and at least LOGO.gap before the first top-bar button.
+ */
+async function checkLogo(page: Page, name: string, width: number) {
+  const found = await page.locator('[role="banner"] a[href="/"]').evaluateAll(links =>
+    links
+      .filter(link => link.checkVisibility())
+      .map(link => {
+        const images = [...link.querySelectorAll('svg')].filter(svg => svg.checkVisibility()).map(svg => svg.getBoundingClientRect());
+        const button = [...document.querySelectorAll('[role="banner"] button')].find(element => element.checkVisibility());
+        return {
+          name: link.getAttribute('aria-label') ?? link.textContent?.trim() ?? '',
+          text: link.textContent?.trim() ?? '',
+          left: Math.min(...images.map(box => box.left)),
+          right: Math.max(...images.map(box => box.right)),
+          heights: [...new Set(images.map(box => Math.round(box.height * 10) / 10))],
+          button: button?.getBoundingClientRect().left ?? Infinity,
+          title: document.querySelector('h1')?.getBoundingClientRect().left ?? NaN,
+        };
+      }),
+  );
+  check(found.length === 1, `${name}: the top bar has ${found.length} visible links home`);
+  const [logo] = found;
+  if (logo == null) return;
+  const logoWidth = Math.round((logo.right - logo.left) * 10) / 10;
+  const expected = width < LOGO.markOnlyBelow ? LOGO.markWidth : LOGO.width;
+  check(logo.name === en['app.name'] && logo.text === '', `${name}: the link home is named "${logo.name}" and shows "${logo.text}"`);
+  check(logoWidth === expected && logo.heights.length === 1 && logo.heights[0] === LOGO.height, `${name}: the logo is ${logoWidth}x${logo.heights.join('/')} px, expected ${expected}x${LOGO.height}`);
+  check(Math.abs(logo.left - logo.title) < 1, `${name}: the logo starts at ${logo.left} px and the title at ${logo.title} px`);
+  check(logo.button - logo.right >= LOGO.gap, `${name}: the logo ends ${Math.round(logo.button - logo.right)} px before the first top-bar button`);
+  console.log(`${name}: logo ${logoWidth}x${logo.heights.join('/')} px at ${logo.left} px, ${Math.round(logo.button - logo.right)} px before the buttons`);
+}
+
+/** Every icon the page links (the tab's and the touch icon) is in the build and is an image of its declared type. */
+async function checkIcons(page: Page, name: string) {
+  const icons = await page.locator('link:is([rel~="icon"], [rel="apple-touch-icon"])').evaluateAll(links =>
+    links.map(link => ({href: (link as HTMLLinkElement).href, type: link.getAttribute('type')})),
+  );
+  check(icons.length === 3, `${name}: the page links ${icons.length} icons, expected the SVG, the 32 px PNG and the touch icon`);
+  for (const icon of icons) {
+    const response = await page.request.get(icon.href);
+    const type = response.headers()['content-type'] ?? '';
+    check(response.ok() && type.startsWith('image/') && (icon.type == null || icon.type === type), `${name}: icon ${icon.href} answers ${response.status()} as ${type}`);
+  }
+  console.log(`${name}: icons ${icons.map(icon => new URL(icon.href).pathname).join(', ')}`);
+}
+
+/**
  * The top bar's controls are one set, as on gentoozh.org: icon buttons of one width, height and icon
  * size, and at phone width at least the theme's 44 px touch height.
  */
@@ -667,8 +732,8 @@ function recordLoading(selector: string) {
 
 /**
  * The page's first paint is its final layout. On a slow link and processor with a cold cache (SLOW_LINK,
- * SLOW_CPU), at 390 and 1280 px: the top bar's buttons and the title row's actions keep the size and
- * place of the first frame they appear in, through the web font's arrival, no layout shift moves them,
+ * SLOW_CPU), at 390 and 1280 px: the top bar's link and buttons and the title row's actions keep the
+ * size and place of the first frame they appear in, through the web font's arrival, no layout shift moves them,
  * and the page's cumulative layout shift stays under CLS_MAX.
  */
 async function checkFirstPaint(browser: Browser, url: string) {
@@ -1066,6 +1131,7 @@ async function main() {
       const wide = shot.width >= 1024;
       await page.screenshot({path: join(out, `${shot.name}-header.png`), clip: {x: 0, y: 0, width: shot.width, height: wide ? HEADER_HEIGHT.wide : HEADER_HEIGHT.narrow}});
       await checkTopBar(page, shot.name, wide);
+      if (shot === SHOTS[0]) await checkIcons(page, shot.name);
       await checkLandmarks(page, shot.name, wide ? [en['outline.label']] : []);
 
       const table = page.locator('.astryx-markdown table').first();
