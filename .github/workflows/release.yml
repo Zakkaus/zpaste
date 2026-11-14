@@ -1,24 +1,40 @@
 name: Release
 
-# On a v* tag: check the tag against the version in Cargo.toml, create a GitHub
-# release whose body is that version's section of CHANGELOG.md, and attach the
-# static x86_64 musl executables. The executables come from the Dockerfile's
-# amd64 target, so they are the ones the image runs. image.yml pushes the image
-# for the same tag.
+# The only workflow that publishes a version. On a v* tag it checks that the
+# tag names the Cargo.toml version and that the tagged commit is on main, builds
+# the Dockerfile's amd64 target once, pushes that image to ghcr.io/zakkaus/zpaste
+# as <version> and sha-<short>, takes the static x86_64 musl executables out of
+# that same image, and creates a GitHub release whose body is the version's
+# section of CHANGELOG.md plus the pushed image digest. image.yml never pushes a
+# version tag, so a tag that fails a check here publishes nothing.
+#
+# A version with a prerelease suffix (0.1.0-beta.1) gets a prerelease release
+# (the release action reads the "-" in the tag) and the image tag is the version
+# as written. No tag is ever called latest.
+#
+# A failed run is safe to start again: the release is recreated, the assets
+# are replaced and the image tags move to the new build.
 on:
   push:
     tags: ["v*"]
 
 permissions:
   contents: write
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/zakkaus/zpaste
 
 jobs:
-  create-release:
-    name: Create release
+  release:
+    name: Release image and executables
     runs-on: ubuntu-latest
     steps:
-      # Full history: the branch check below needs main's commits to find the
-      # tagged one.
+      # Full history: the main check below needs main's commits.
       - name: Checkout repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -27,24 +43,63 @@ jobs:
       - name: Verify tag matches Cargo.toml
         run: scripts/check-version-tag.sh "$GITHUB_REF_NAME"
 
-      # Fails when CHANGELOG.md has no section for the version, or the tagged
-      # commit is not on main.
-      - uses: taiki-e/create-gh-release-action@045e5c0ed9c50cc1f96de7e891a09ad3daea245f # v1.12.0
+      - name: Verify the tagged commit is on main
+        run: |
+          commit="$(git rev-parse "$GITHUB_REF_NAME^{commit}")"
+          if ! git merge-base --is-ancestor "$commit" origin/main; then
+            echo "tagged commit $commit is not on main; tag a commit that is merged" >&2
+            exit 1
+          fi
+
+      # Fail before anything is pushed; the release step reads the same section.
+      - name: Verify CHANGELOG.md has the version's section
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          pattern="^## \[$(printf '%s' "$version" | sed 's/\./\\./g')\]"
+          if ! grep -Eq "$pattern" CHANGELOG.md; then
+            echo "CHANGELOG.md has no section headed [$version]" >&2
+            exit 1
+          fi
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
-          changelog: CHANGELOG.md
-          branch: main
-          token: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-  upload-assets:
-    name: x86_64-unknown-linux-musl
-    needs: create-release
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Image tags and labels
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=semver,pattern={{version}}
 
-      - name: Build executables
-        run: scripts/export-executables.sh dist
+      # No build cache: a release builds from the pinned inputs alone.
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Executables from the pushed image
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          if [ -z "$DIGEST" ]; then
+            echo "the push reported no digest" >&2
+            exit 1
+          fi
+          docker pull "$IMAGE@$DIGEST"
+          scripts/export-executables.sh dist --image "$IMAGE@$DIGEST"
 
       - name: Prepare assets
         id: prepare
@@ -55,9 +110,42 @@ jobs:
           sha256sum "$archive" > "$archive.sha256"
           echo "archive=$archive" >> "$GITHUB_OUTPUT"
 
-      - name: Upload to release
+      # The action recreates a release that already exists.
+      - uses: taiki-e/create-gh-release-action@045e5c0ed9c50cc1f96de7e891a09ad3daea245f # v1.12.0
+        with:
+          changelog: CHANGELOG.md
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload assets and record the image digest
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           ARCHIVE: ${{ steps.prepare.outputs.archive }}
-        run: gh release upload "$GITHUB_REF_NAME" "$ARCHIVE" "$ARCHIVE.sha256"
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" --clobber "$ARCHIVE" "$ARCHIVE.sha256"
+          gh release view "$GITHUB_REF_NAME" --json body --jq .body \
+            | sed '/^## Container image$/,$d' > notes.md
+          {
+            echo "## Container image"
+            echo
+            echo "Pushed \`$IMAGE@$DIGEST\`"
+            echo
+            echo "Tags:"
+            while IFS= read -r t; do
+              if [ -n "$t" ]; then echo "- \`$t\`"; fi
+            done <<< "$TAGS"
+            echo
+            echo "The executables in \`$ARCHIVE\` were copied out of this image."
+          } >> notes.md
+          gh release edit "$GITHUB_REF_NAME" --notes-file notes.md
+          # A version with a "-" is a prerelease and must not be the latest release.
+          want=false
+          case "$GITHUB_REF_NAME" in *-*) want=true ;; esac
+          got="$(gh release view "$GITHUB_REF_NAME" --json isPrerelease --jq .isPrerelease)"
+          if [ "$got" != "$want" ]; then
+            echo "release $GITHUB_REF_NAME has isPrerelease=$got, want $want" >&2
+            exit 1
+          fi
+          cat notes.md >> "$GITHUB_STEP_SUMMARY"
