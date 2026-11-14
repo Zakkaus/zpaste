@@ -34,7 +34,7 @@ macro_rules! v1_routes {
 
 v1_routes! {
     "/v1" { get => pastes::get_version }
-    "/v1/pastes" { post => pastes::create }
+    "/v1/pastes" { get => pastes::list, post => pastes::create }
     "/v1/pastes/{id}" { get => pastes::show, delete => pastes::delete }
-    "/v1/pastes/{id}/content" { get => pastes::get_content }
+    "/v1/pastes/{id}/content" { get => pastes::get_content, post => pastes::read_content }
 }

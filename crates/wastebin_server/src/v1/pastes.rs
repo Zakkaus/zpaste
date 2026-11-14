@@ -5,32 +5,54 @@
 use std::num::NonZeroU32;
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::rejection::QueryRejection;
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum_extra::extract::SignedCookieJar;
+use serde::Deserialize;
+#[cfg(test)]
+use serde::Serialize;
+#[cfg(test)]
+use utoipa::{IntoParams, ToSchema};
 
+use wastebin_core::crypto::Password;
 use wastebin_core::db::{Head, read, write};
 use wastebin_core::expiration::Expiration;
 use wastebin_core::id::Id;
 
 use crate::AppState;
 use crate::cache::valid_extension;
+use crate::client::ClientKey;
 use crate::handlers::extract::sign_owner_token;
 use crate::handlers::uid_cookie;
+use crate::service;
 use crate::v1::auth::{self, Identity};
 #[cfg(test)]
 use crate::v1::contract::responses::{
     BadRequest, Forbidden, NotFound, PayloadTooLarge, ReadPrecondition, TooManyRequests,
-    Unauthorized,
+    Unauthorized, WrongPassword,
 };
 use crate::v1::error::{ApiError, ErrorType, V1Json};
+#[cfg(test)]
+use crate::v1::model::PasteId;
 use crate::v1::model::{
-    Paste, PasteCreate, PasteCreateRequest, PasteCreated, PasteCreatedDocument, PasteDocument,
-    VERSION_DOCUMENT, VersionDocument,
+    ContentDocument, ContentReadRequest, Paste, PasteCreate, PasteCreateRequest, PasteCreated,
+    PasteCreatedDocument, PasteDocument, PasteListDocument, VERSION_DOCUMENT, VersionDocument,
 };
 
 const MAX_TITLE_CHARS: usize = 256;
+const DEFAULT_LIST_LIMIT: usize = 20;
+const MAX_LIST_LIMIT: usize = 100;
+
+/// The query of `listPastes` as sent; [`list`] checks each value, so every malformed one is the
+/// same 400 in the envelope.
+#[derive(Deserialize)]
+pub(crate) struct ListParams {
+    owner: Option<String>,
+    limit: Option<String>,
+    marker: Option<String>,
+}
 
 /// Show the API version
 #[cfg_attr(test, utoipa::path(
@@ -66,10 +88,11 @@ pub(crate) async fn get_version() -> Json<VersionDocument> {
 /// - Any other create (no `Origin`, as from curl and gzpaste) gets
 ///   `owner_token` in the body, once, and no cookie.
 ///
-/// A create that sets `password` derives a key, so it takes a slot of the
-/// shared key-derivation limit; when none comes free within the server's wait
-/// it is 429 with `Retry-After`, and nothing is created. A create without a
-/// password never counts. The general create rate is the proxy's.
+/// A create that sets `password` derives a key, so it counts against the
+/// client's derivation rate and takes a slot of the shared key-derivation
+/// limit; past either it is 429 with `Retry-After`, and nothing is created. A
+/// create without a password never counts. The general create rate is the
+/// proxy's.
 #[cfg_attr(test, utoipa::path(
     post,
     path = "/v1/pastes",
@@ -97,29 +120,26 @@ pub(crate) async fn get_version() -> Json<VersionDocument> {
 ))]
 pub(crate) async fn create(
     State(state): State<AppState>,
+    client: ClientKey,
     headers: HeaderMap,
     body: Result<V1Json<PasteCreateRequest>, ApiError>,
 ) -> Result<Response, ApiError> {
     // Credentials and `Origin` are answered before the body.
     let caller = auth::caller(&headers, &state.key, &state.page.base_url, true)?;
     let V1Json(PasteCreateRequest { paste }) = body?;
-    let mut entry = validate(paste, &state.page.expirations)?;
+    let entry = validate(paste, &state.page.expirations)?;
 
-    let (uid, owner_token, cookie) = match caller.identity {
-        Identity::Token(uid) => (uid, None, None),
-        Identity::Cookie(uids) => (uids[0], None, None),
-        Identity::Anonymous => {
-            let uid = state.db.next_uid().await?;
-            if caller.browser {
-                (uid, None, Some(uid_cookie(&[uid])))
-            } else {
-                (uid, Some(sign_owner_token(&state.key, uid)), None)
-            }
-        }
+    let owner = match caller.identity {
+        Identity::Token(uid) => Some(uid),
+        Identity::Cookie(uids) => uids.first().copied(),
+        Identity::Anonymous => None,
     };
-
-    entry.uid = Some(uid);
-    let head = state.db.create(entry).await?;
+    let (head, uid) = service::create(&state, client, entry, owner).await?;
+    let (owner_token, cookie) = match owner {
+        Some(_) => (None, None),
+        None if caller.browser => (None, Some(uid_cookie(&[uid]))),
+        None => (Some(sign_owner_token(&state.key, uid)), None),
+    };
     let location = HeaderValue::try_from(format!("/v1/pastes/{}", head.id))
         .map_err(|_| ApiError::internal())?;
     let body = PasteCreatedDocument {
@@ -333,6 +353,199 @@ pub(crate) async fn get_content(
         .into_response())
 }
 
+// The documented values of `owner`; `ListParams` reads the query.
+#[cfg(test)]
+#[allow(dead_code, reason = "a schema of the generated contract")]
+#[derive(Serialize, ToSchema)]
+enum OwnerFilter {
+    #[serde(rename = "me")]
+    Me,
+}
+
+// The documented query of `listPastes`; `ListParams` reads it.
+#[cfg(test)]
+#[allow(dead_code, reason = "a schema of the generated contract")]
+#[derive(Serialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+struct ListQuery {
+    /// Only `me` is defined.
+    #[param(inline)]
+    owner: OwnerFilter,
+    #[param(minimum = 1, maximum = 100, default = 20)]
+    limit: Option<u32>,
+    /// Id of the last paste on the previous page. A marker that is malformed,
+    /// deleted, expired or owned by another identity gives the same 400.
+    marker: Option<PasteId>,
+}
+
+/// List the caller's pastes
+///
+/// Filters by identity and expiry first, then pages. Order is newest first by
+/// `(created_at, id)`; pastes from before the `created_at` column sort last.
+/// `pastes_links` holds only a `next` link, which keeps `owner=me` and `limit`.
+/// With the cookie, `me` is every identity the cookie holds.
+#[cfg_attr(test, utoipa::path(
+    get,
+    path = "/v1/pastes",
+    tag = "pastes",
+    operation_id = "listPastes",
+    extensions(("x-phase" = json!("P1"))),
+    security(("ownerToken" = []), ("ownerCookie" = [])),
+    params(ListQuery),
+    responses(
+        (status = 200, description = "One page of pastes.", body = PasteListDocument),
+        (status = 400, response = BadRequest),
+        (status = 401, response = Unauthorized),
+    ),
+))]
+pub(crate) async fn list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    query: Result<Query<ListParams>, QueryRejection>,
+) -> Result<Response, ApiError> {
+    let caller = auth::caller(&headers, &state.key, &state.page.base_url, false)?;
+    let uids = caller.uids();
+    if uids.is_empty() {
+        return Err(ApiError::unauthorized(
+            "an owner token or the uid cookie is required",
+        ));
+    }
+
+    let Query(params) = query.map_err(|rejection| ApiError::bad_request(rejection.body_text()))?;
+    if params.owner.as_deref() != Some("me") {
+        return Err(ApiError::bad_request("owner must be me"));
+    }
+    let limit = match params.limit.as_deref() {
+        None => DEFAULT_LIST_LIMIT,
+        Some(limit) => limit
+            .parse::<usize>()
+            .ok()
+            .filter(|limit| (1..=MAX_LIST_LIMIT).contains(limit))
+            .ok_or_else(|| ApiError::bad_request("limit must be an integer from 1 to 100"))?,
+    };
+    let marker = params
+        .marker
+        .as_deref()
+        .map(|marker| marker.parse::<Id>().map_err(|_| invalid_marker()))
+        .transpose()?;
+
+    let page = match state.db.list_for(uids, marker, limit).await {
+        Ok(page) => page,
+        Err(wastebin_core::db::Error::InvalidMarker) => return Err(invalid_marker()),
+        Err(err) => return Err(err.into()),
+    };
+    let next = page
+        .more
+        .then(|| page.heads.last())
+        .flatten()
+        .map(|last| next_query(limit, last.id));
+
+    Ok(Json(PasteListDocument::new(
+        &page.heads,
+        &state.page.base_url,
+        next,
+    ))
+    .into_response())
+}
+
+/// The query of the page after `marker`. Ids may hold `+`, which a query decodes as a space unless
+/// it is encoded.
+fn next_query(limit: usize, marker: Id) -> String {
+    url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("owner", "me")
+        .append_pair("limit", &limit.to_string())
+        .append_pair("marker", &marker.to_string())
+        .finish()
+}
+
+/// One answer for every marker that is not an unexpired paste of the caller, so a marker reveals
+/// nothing about an id (decision D6).
+fn invalid_marker() -> ApiError {
+    ApiError::bad_request("marker is not a paste of this list")
+}
+
+/// Read content with a password or a burn confirmation
+///
+/// No credentials are needed, but a request that carries the `uid` cookie
+/// without a matching `Origin` is 403 before the paste is looked up, because
+/// a burn read is a write.
+///
+/// The only way to consume a burn-after-reading paste: it is consumed once,
+/// atomically, when the request has `confirm_burn: true` (and, if encrypted,
+/// the right `password`), and is 404 afterwards. Of two concurrent confirmed
+/// requests, one gets the content and the other 404. A client that gets 404
+/// on a retry must treat the paste as possibly read and must not retry on its
+/// own.
+///
+/// | Paste | Body | Answer |
+/// | --- | --- | --- |
+/// | encrypted | no `password` | 409 `password_required` |
+/// | encrypted | wrong `password` | 401 `wrong_password` |
+/// | encrypted, not burn | right `password` | 200 |
+/// | burn, not encrypted | no `confirm_burn` | 409 `confirmation_required` |
+/// | burn, not encrypted | `confirm_burn: true` | 200, consumed |
+/// | encrypted and burn | right `password`, no `confirm_burn` | 409 `confirmation_required`; nothing returned or consumed |
+/// | encrypted and burn | right `password` and `confirm_burn: true` | 200, consumed |
+///
+/// Every request that carries `password` for an encrypted paste derives a
+/// key, the confirmation step included: it counts against the client's
+/// derivation rate and takes a slot of the shared derivation limit, and past
+/// either it is 429 with `Retry-After`. A plain paste derives nothing.
+#[cfg_attr(test, utoipa::path(
+    post,
+    path = "/v1/pastes/{id}/content",
+    tag = "content",
+    operation_id = "readContent",
+    extensions(("x-phase" = json!("P1"))),
+    security(()),
+    request_body(content = ContentReadRequest, examples(
+        ("password" = (value = json!({"password": "hunter2"}))),
+        ("burn" = (value = json!({"confirm_burn": true}))),
+        ("both" = (value = json!({"password": "hunter2", "confirm_burn": true}))),
+    )),
+    responses(
+        (status = 200, description = "The current content.", body = ContentDocument),
+        (status = 400, response = BadRequest),
+        (status = 401, response = WrongPassword),
+        (status = 403, response = Forbidden),
+        (status = 404, response = NotFound),
+        (status = 409, response = ReadPrecondition),
+        (status = 429, response = TooManyRequests),
+    ),
+))]
+pub(crate) async fn read_content(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    client: ClientKey,
+    headers: HeaderMap,
+    body: Result<V1Json<ContentReadRequest>, ApiError>,
+) -> Result<Response, ApiError> {
+    // `Origin` and the body are answered before the paste is looked up or a key derived.
+    auth::check_origin(&headers, &state.page.base_url)?;
+    let V1Json(request) = body?;
+    if request.password.as_ref().is_some_and(String::is_empty) {
+        return Err(ApiError::bad_request("password must be non-empty"));
+    }
+    let password = request
+        .password
+        .map(|password| Password::from(password.into_bytes()));
+
+    let content = service::read(
+        &state,
+        client,
+        paste_id(&id)?,
+        password,
+        request.confirm_burn.is_some(),
+    )
+    .await?;
+
+    Ok((
+        [(header::ETAG, etag(&content.head))],
+        Json(ContentDocument::new(&content.head, content.text)),
+    )
+        .into_response())
+}
+
 /// A path id that does not parse names no paste: 404, like a missing one.
 fn paste_id(id: &str) -> Result<Id, ApiError> {
     id.parse().map_err(|_| ApiError::not_found())
@@ -342,4 +555,29 @@ fn paste_id(id: &str) -> Result<Id, ApiError> {
 fn etag(head: &Head) -> HeaderValue {
     HeaderValue::try_from(format!("\"{}\"", head.version_id))
         .unwrap_or_else(|_| HeaderValue::from_static("\"\""))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn next_query_survives_a_plus_in_the_marker() -> Result<(), Box<dyn std::error::Error>> {
+        let marker: Id = "ab+c-1".parse()?;
+        let id = marker.to_string();
+        assert!(id.contains('+'), "{id}");
+        let query = next_query(2, marker);
+        let decoded = url::form_urlencoded::parse(query.as_bytes())
+            .into_owned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            decoded,
+            [
+                (String::from("owner"), String::from("me")),
+                (String::from("limit"), String::from("2")),
+                (String::from("marker"), id),
+            ]
+        );
+        Ok(())
+    }
 }

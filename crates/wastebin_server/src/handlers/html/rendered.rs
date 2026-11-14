@@ -4,13 +4,13 @@ use axum::extract::{Form, Path, State};
 use axum::response::{IntoResponse, Response};
 
 use crate::cache::{Key, Mode};
+use crate::client::{ClientKey, RateLimit};
 use crate::handlers::NoStore;
 use crate::handlers::extract::{Theme, Uids};
 use crate::handlers::html::paste::PasteForm;
-use crate::handlers::html::{
-    BurnConfirmation, ErrorResponse, FormAction, PasswordInput, make_error,
-};
+use crate::handlers::html::{BurnConfirmation, FormAction, PasswordInput, make_error_response};
 use crate::i18n::Lang;
+use crate::service;
 use crate::{Cache, Database, Highlighter, Page};
 use wastebin_core::crypto::Password;
 use wastebin_core::db;
@@ -40,13 +40,15 @@ pub async fn get<E>(
     State(cache): State<Cache>,
     State(page): State<Page>,
     State(db): State<Database>,
+    State(rate): State<RateLimit>,
+    client: ClientKey,
     State(highlighter): State<Highlighter>,
     Path(id): Path<String>,
     uids: Option<Uids>,
     theme: Option<Theme>,
     lang: Lang,
     form: Result<Form<PasteForm>, E>,
-) -> Result<Response, ErrorResponse> {
+) -> Response {
     async {
         let form = form.ok().map(|Form(form)| form);
         let password = form
@@ -68,6 +70,11 @@ pub async fn get<E>(
                 action: FormAction::rendered(&key),
             }
             .into_response());
+        }
+
+        // Only an encrypted paste takes a password, so a password means a derivation.
+        if password.is_some() {
+            service::admit(&rate, client)?;
         }
 
         let (data, is_available, encrypted) = match db.get(key.id, password).await {
@@ -141,7 +148,7 @@ pub async fn get<E>(
         })
     }
     .await
-    .map_err(|err| make_error(err, page, theme, lang))
+    .unwrap_or_else(|err: crate::Error| make_error_response(err, page, theme, lang))
 }
 
 #[cfg(test)]

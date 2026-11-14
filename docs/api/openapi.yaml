@@ -170,10 +170,11 @@ paths:
         - Any other create (no `Origin`, as from curl and gzpaste) gets
           `owner_token` in the body, once, and no cookie.
 
-        A create that sets `password` derives a key, so it takes a slot of the
-        shared key-derivation limit; when none comes free within the server's wait
-        it is 429 with `Retry-After`, and nothing is created. A create without a
-        password never counts. The general create rate is the proxy's.
+        A create that sets `password` derives a key, so it counts against the
+        client's derivation rate and takes a slot of the shared key-derivation
+        limit; past either it is 429 with `Retry-After`, and nothing is created. A
+        create without a password never counts. The general create rate is the
+        proxy's.
       operationId: createPaste
       parameters:
       - $ref: '#/components/parameters/RequestId'
@@ -479,8 +480,10 @@ paths:
         | encrypted and burn | right `password`, no `confirm_burn` | 409 `confirmation_required`; nothing returned or consumed |
         | encrypted and burn | right `password` and `confirm_burn: true` | 200, consumed |
 
-        Every request that carries `password` counts against the shared
-        derivation limit (429), the confirmation step included.
+        Every request that carries `password` for an encrypted paste derives a
+        key, the confirmation step included: it counts against the client's
+        derivation rate and takes a slot of the shared derivation limit, and past
+        either it is 429 with `Retry-After`. A plain paste derives nothing.
       operationId: readContent
       parameters:
       - $ref: '#/components/parameters/PasteIdPath'

@@ -8,7 +8,7 @@
 use serde::Serialize;
 use utoipa::ToSchema;
 
-use crate::v1::model::{Link, Paste, PasteId, PasteLinks, Title, True, VersionId};
+use crate::v1::model::{Link, PasteId, PasteLinks, Title, True, VersionId};
 
 /// A strong entity tag, `"<version_id>"`.
 #[derive(Serialize, ToSchema)]
@@ -54,17 +54,6 @@ pub(crate) struct Kind(Option<String>);
 
 #[derive(Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct PasteListDocument {
-    pastes: Vec<Paste>,
-    /// Holds one `next` link while more pages exist; empty on the last page.
-    #[schema(max_items = 1, example = json!([
-        {"rel": "next", "href": "https://paste.gentoozh.org/v1/pastes?owner=me&limit=20&marker=abc123"}
-    ]))]
-    pastes_links: Vec<Link>,
-}
-
-#[derive(Serialize, ToSchema)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct PasteUpdate {
     #[schema(required = true)]
     title: Title,
@@ -76,38 +65,12 @@ pub(crate) struct PasteUpdateRequest {
     paste: PasteUpdate,
 }
 
-/// `password` for an encrypted paste, `confirm_burn: true` for a
-/// burn-after-reading paste, both in one request to consume an encrypted burn
-/// paste. See `readContent` for every combination.
-#[derive(Serialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ContentReadRequest {
-    #[schema(nullable = false, min_length = 1)]
-    password: Option<String>,
-    #[schema(inline, nullable = false)]
-    confirm_burn: Option<True>,
-}
-
 /// `{}` for a plain paste, `{"password": ...}` for an encrypted one. History never consumes, so there is no `confirm_burn`.
 #[derive(Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct VersionReadRequest {
     #[schema(nullable = false, min_length = 1)]
     password: Option<String>,
-}
-
-#[derive(Serialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-struct Content {
-    text: String,
-    version_id: VersionId,
-}
-
-#[derive(Serialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ContentDocument {
-    #[schema(inline)]
-    content: Content,
 }
 
 #[derive(Serialize, ToSchema)]

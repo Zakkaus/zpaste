@@ -9,8 +9,11 @@ use serde_json::{Value, json};
 use crate::test_helpers::{Client, StoreCookies};
 use crate::v1::contract::{document, schema};
 
+mod content;
 mod create;
 mod delete;
+mod legacy;
+mod list;
 mod read;
 
 /// The public URL of the test server; a request with this `Origin` is a browser request.

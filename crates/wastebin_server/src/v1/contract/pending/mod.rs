@@ -10,64 +10,19 @@
     reason = "declarations for the generated contract; nothing calls them"
 )]
 
-use serde::Serialize;
-use utoipa::{IntoParams, ToSchema};
-
 use schemas::{
-    ContentDocument, ContentReadRequest, PasteListDocument, PasteUpdateRequest,
-    VersionListDocument, VersionReadRequest, WorkspaceCreateRequest, WorkspaceDocument,
-    WorkspaceEntryAddRequest, WorkspaceEntryDocument, WorkspaceUpdateRequest,
+    PasteUpdateRequest, VersionListDocument, VersionReadRequest, WorkspaceCreateRequest,
+    WorkspaceDocument, WorkspaceEntryAddRequest, WorkspaceEntryDocument, WorkspaceUpdateRequest,
 };
 
 use super::responses::{
     BadRequest, BurnNoHistory, BurnNotEditable, EntryAddConflict, EntryPreconditionFailed,
-    EntryWriteConflict, Forbidden, NotFound, PayloadTooLarge, PreconditionFailed, ReadPrecondition,
-    SlugTaken, TooManyRequests, Unauthorized, VersionReadConflict, WrongPassword,
+    EntryWriteConflict, Forbidden, NotFound, PayloadTooLarge, PreconditionFailed, SlugTaken,
+    TooManyRequests, Unauthorized, VersionReadConflict, WrongPassword,
 };
-use crate::v1::model::{Extension, PasteId, VersionId};
+use crate::v1::model::{ContentDocument, Extension, VersionId};
 
 pub(crate) mod schemas;
-
-#[derive(Serialize, ToSchema)]
-enum OwnerFilter {
-    #[serde(rename = "me")]
-    Me,
-}
-
-#[derive(Serialize, IntoParams)]
-#[into_params(parameter_in = Query)]
-struct ListQuery {
-    /// Only `me` is defined.
-    #[param(inline)]
-    owner: OwnerFilter,
-    #[param(minimum = 1, maximum = 100, default = 20)]
-    limit: Option<u32>,
-    /// Id of the last paste on the previous page. A marker that is malformed,
-    /// deleted, expired or owned by another identity gives the same 400.
-    marker: Option<PasteId>,
-}
-
-/// List the caller's pastes
-///
-/// Filters by identity and expiry first, then pages. Order is newest first by
-/// `(created_at, id)`; pastes from before the `created_at` column sort last.
-/// `pastes_links` holds only a `next` link, which keeps `owner=me` and `limit`.
-/// With the cookie, `me` is every identity the cookie holds.
-#[utoipa::path(
-    get,
-    path = "/v1/pastes",
-    tag = "pastes",
-    operation_id = "listPastes",
-    extensions(("x-phase" = json!("P1"))),
-    security(("ownerToken" = []), ("ownerCookie" = [])),
-    params(ListQuery),
-    responses(
-        (status = 200, description = "One page of pastes.", body = PasteListDocument),
-        (status = 400, response = BadRequest),
-        (status = 401, response = Unauthorized),
-    ),
-)]
-fn list_pastes() {}
 
 /// Change the title
 ///
@@ -99,55 +54,6 @@ fn list_pastes() {}
     ),
 )]
 fn update_paste() {}
-
-/// Read content with a password or a burn confirmation
-///
-/// No credentials are needed, but a request that carries the `uid` cookie
-/// without a matching `Origin` is 403 before the paste is looked up, because
-/// a burn read is a write.
-///
-/// The only way to consume a burn-after-reading paste: it is consumed once,
-/// atomically, when the request has `confirm_burn: true` (and, if encrypted,
-/// the right `password`), and is 404 afterwards. Of two concurrent confirmed
-/// requests, one gets the content and the other 404. A client that gets 404
-/// on a retry must treat the paste as possibly read and must not retry on its
-/// own.
-///
-/// | Paste | Body | Answer |
-/// | --- | --- | --- |
-/// | encrypted | no `password` | 409 `password_required` |
-/// | encrypted | wrong `password` | 401 `wrong_password` |
-/// | encrypted, not burn | right `password` | 200 |
-/// | burn, not encrypted | no `confirm_burn` | 409 `confirmation_required` |
-/// | burn, not encrypted | `confirm_burn: true` | 200, consumed |
-/// | encrypted and burn | right `password`, no `confirm_burn` | 409 `confirmation_required`; nothing returned or consumed |
-/// | encrypted and burn | right `password` and `confirm_burn: true` | 200, consumed |
-///
-/// Every request that carries `password` counts against the shared
-/// derivation limit (429), the confirmation step included.
-#[utoipa::path(
-    post,
-    path = "/v1/pastes/{id}/content",
-    tag = "content",
-    operation_id = "readContent",
-    extensions(("x-phase" = json!("P1"))),
-    security(()),
-    request_body(content = ContentReadRequest, examples(
-        ("password" = (value = json!({"password": "hunter2"}))),
-        ("burn" = (value = json!({"confirm_burn": true}))),
-        ("both" = (value = json!({"password": "hunter2", "confirm_burn": true}))),
-    )),
-    responses(
-        (status = 200, description = "The current content.", body = ContentDocument),
-        (status = 400, response = BadRequest),
-        (status = 401, response = WrongPassword),
-        (status = 403, response = Forbidden),
-        (status = 404, response = NotFound),
-        (status = 409, response = ReadPrecondition),
-        (status = 429, response = TooManyRequests),
-    ),
-)]
-fn read_content() {}
 
 /// Replace the content
 ///

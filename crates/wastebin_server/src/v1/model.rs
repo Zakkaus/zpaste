@@ -2,7 +2,8 @@
 //! contract is its own closed struct, never the storage struct, so a field the contract does not
 //! list cannot leak.
 
-use serde::{Deserialize, Serialize, Serializer};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url::Url;
 use utoipa::openapi::RefOr;
 use utoipa::openapi::schema::{ObjectBuilder, Schema, Type};
@@ -32,6 +33,16 @@ macro_rules! constant_bool {
         }
 
         impl ToSchema for $name {}
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                if bool::deserialize(deserializer)? == $value {
+                    Ok(Self)
+                } else {
+                    Err(D::Error::custom(concat!("expected ", stringify!($value))))
+                }
+            }
+        }
     };
 }
 
@@ -117,10 +128,6 @@ impl std::fmt::Debug for OwnerToken {
 
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
-#[allow(
-    dead_code,
-    reason = "`next` belongs to the owner list of the next slice"
-)]
 pub(crate) enum LinkRel {
     #[serde(rename = "self")]
     Self_,
@@ -383,4 +390,73 @@ pub(crate) struct PasteCreate {
 #[serde(deny_unknown_fields)]
 pub(crate) struct PasteCreateRequest {
     pub paste: PasteCreate,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PasteListDocument {
+    pastes: Vec<Paste>,
+    /// Holds one `next` link while more pages exist; empty on the last page.
+    #[schema(max_items = 1, example = json!([
+        {"rel": "next", "href": "https://paste.gentoozh.org/v1/pastes?owner=me&limit=20&marker=abc123"}
+    ]))]
+    pastes_links: Vec<Link>,
+}
+
+impl PasteListDocument {
+    /// `heads` as one page; `next` is the query of the following page, when there is one.
+    pub(crate) fn new(heads: &[Head], base_url: &Url, next: Option<String>) -> Self {
+        let base = base_url.as_str().trim_end_matches('/');
+
+        Self {
+            pastes: heads
+                .iter()
+                .map(|head| Paste::new(head, base_url))
+                .collect(),
+            pastes_links: next
+                .map(|query| Link {
+                    rel: LinkRel::Next,
+                    href: format!("{base}/v1/pastes?{query}"),
+                })
+                .into_iter()
+                .collect(),
+        }
+    }
+}
+
+/// `password` for an encrypted paste, `confirm_burn: true` for a
+/// burn-after-reading paste, both in one request to consume an encrypted burn
+/// paste. See `readContent` for every combination.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ContentReadRequest {
+    #[schema(nullable = false, min_length = 1)]
+    pub password: Option<String>,
+    #[schema(inline, nullable = false)]
+    pub confirm_burn: Option<True>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+struct Content {
+    text: String,
+    version_id: VersionId,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ContentDocument {
+    #[schema(inline)]
+    content: Content,
+}
+
+impl ContentDocument {
+    pub(crate) fn new(head: &Head, text: String) -> Self {
+        Self {
+            content: Content {
+                text,
+                version_id: VersionId(head.version_id.to_string()),
+            },
+        }
+    }
 }

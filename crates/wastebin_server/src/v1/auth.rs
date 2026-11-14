@@ -47,11 +47,7 @@ pub(crate) fn caller(
     public_url: &Url,
     writes: bool,
 ) -> Result<Caller, ApiError> {
-    let browser = headers
-        .get(header::ORIGIN)
-        .and_then(|origin| origin.to_str().ok())
-        .and_then(|origin| Url::parse(origin).ok())
-        .is_some_and(|origin| origin.origin() == public_url.origin());
+    let browser = is_browser(headers, public_url);
 
     // With `Authorization`, the header alone decides and the cookie is ignored.
     if let Some(authorization) = headers.get(header::AUTHORIZATION) {
@@ -77,9 +73,7 @@ pub(crate) fn caller(
     }
 
     if writes && !browser {
-        return Err(ApiError::forbidden(
-            "a request with the uid cookie must send Origin equal to this site",
-        ));
+        return Err(origin_mismatch());
     }
 
     // A cookie whose signature fails counts as absent, as in upstream's signed cookie jar.
@@ -90,4 +84,32 @@ pub(crate) fn caller(
         .map_or(Identity::Anonymous, Identity::Cookie);
 
     Ok(Caller { identity, browser })
+}
+
+/// The `Origin` rule alone, for an operation that writes but takes no credentials
+/// (`readContent`, which can consume a paste): a request with the `uid` cookie and without
+/// `Authorization` needs `Origin` equal to `public_url`. `Authorization` is not verified, because
+/// the operation grants it nothing.
+pub(crate) fn check_origin(headers: &HeaderMap, public_url: &Url) -> Result<(), ApiError> {
+    if headers.contains_key(header::AUTHORIZATION)
+        || CookieJar::from_headers(headers).get("uid").is_none()
+        || is_browser(headers, public_url)
+    {
+        Ok(())
+    } else {
+        Err(origin_mismatch())
+    }
+}
+
+/// `Origin` equals the public URL: the request comes from the web app.
+fn is_browser(headers: &HeaderMap, public_url: &Url) -> bool {
+    headers
+        .get(header::ORIGIN)
+        .and_then(|origin| origin.to_str().ok())
+        .and_then(|origin| Url::parse(origin).ok())
+        .is_some_and(|origin| origin.origin() == public_url.origin())
+}
+
+fn origin_mismatch() -> ApiError {
+    ApiError::forbidden("a request with the uid cookie must send Origin equal to this site")
 }
