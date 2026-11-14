@@ -1,0 +1,121 @@
+/*
+ * Rules on the DOM Astryx Markdown renders, which its props do not reach. Wide tables keep scrolling
+ * inside Astryx's own wrapper; these rules add the fixed first column and the edge shadow that the
+ * table exception in REQUIREMENTS.md describes.
+ */
+
+/*
+ * A heading reached through its link scrolls clear of the sticky top bar. AppShell (height auto)
+ * publishes the bar's measured height as --_app-shell-header-height on its root.
+ */
+.body :is(h1, h2, h3, h4, h5, h6)[id] {
+  scroll-margin-top: calc(var(--_app-shell-header-height, 0rem) + var(--spacing-4));
+}
+
+/*
+ * The page's h1 is the title row, so a paste's `#` renders as h2 (MarkdownView). Its look keeps the
+ * level the author wrote: h2 takes the heading-1 role, h3 heading-2, and so on. Without this, `###`
+ * drew smaller than the body text beside it.
+ */
+.body h2 {
+  font-size: var(--text-heading-1-size);
+  font-weight: var(--text-heading-1-weight);
+  line-height: var(--text-heading-1-leading);
+}
+.body h3 {
+  font-size: var(--text-heading-2-size);
+  font-weight: var(--text-heading-2-weight);
+  line-height: var(--text-heading-2-leading);
+}
+.body h4 {
+  font-size: var(--text-heading-3-size);
+  font-weight: var(--text-heading-3-weight);
+  line-height: var(--text-heading-3-leading);
+}
+.body h5 {
+  font-size: var(--text-heading-4-size);
+  font-weight: var(--text-heading-4-weight);
+  line-height: var(--text-heading-4-leading);
+}
+.body h6 {
+  font-size: var(--text-heading-5-size);
+  font-weight: var(--text-heading-5-weight);
+  line-height: var(--text-heading-5-leading);
+}
+
+/* Inline code in a heading, such as a file name, takes the heading's size instead of the code size. */
+.body :is(h2, h3, h4, h5, h6) code {
+  font-size: inherit;
+}
+
+/*
+ * Tables are data, not prose: their cells use the label role instead of the reading body size the
+ * theme gives Markdown, so a row is as tall as its content and wraps less on a phone.
+ */
+.body :global(.astryx-table-scroll-wrapper) {
+  --text-body-size: var(--text-label-size);
+  --text-body-leading: var(--text-label-leading);
+}
+
+/* The header row stands on the muted surface (docs/design-language.md, "Tokens"), drawn as a flat image layer so the sticky cell below can put it over an opaque colour. */
+.body :global(.astryx-table-scroll-wrapper) th {
+  background-image: linear-gradient(var(--color-background-muted), var(--color-background-muted));
+}
+
+/* Cells of unequal height align to the top (web/AGENTS.md, "Alignment"). */
+.body :global(.astryx-table-cell) {
+  vertical-align: top;
+}
+
+/*
+ * The first column stays while the rest scrolls under it, on an opaque surface; its header cell
+ * keeps the muted layer above that surface.
+ */
+.body :global(.astryx-table-scroll-wrapper) :is(th, td):first-child {
+  position: sticky;
+  inset-inline-start: 0;
+  z-index: 1;
+  background-color: var(--color-background-surface);
+}
+
+/*
+ * On a phone the fixed column takes at most part of the width, so the columns that scroll stay
+ * readable; its text wraps between words instead of widening it.
+ */
+@media (max-width: 640px) {
+  .body :global(.astryx-table-scroll-wrapper) :is(th, td):first-child {
+    max-width: 40vw;
+    overflow-wrap: break-word;
+  }
+  .body :global(.astryx-table-scroll-wrapper) :is(th, td):first-child code {
+    white-space: normal;
+  }
+}
+
+/*
+ * An edge shadow shows that more columns are off screen. The shadow stays at the box's edge
+ * (attachment scroll); a cover of the same width rides at the end of the content (attachment local)
+ * and hides it once the last column is in view, or when nothing overflows.
+ */
+.body :global(.astryx-table-scroll-wrapper) {
+  background:
+    linear-gradient(var(--color-background-surface), var(--color-background-surface)) right / var(--spacing-3) 100% no-repeat local,
+    radial-gradient(farthest-side at 100% 50%, var(--color-overlay-pressed), transparent) right / var(--spacing-3) 100% no-repeat scroll;
+}
+
+/*
+ * Fenced code in a paste. CodeBlock skips the layout of off-screen code (content-visibility: auto)
+ * and reserves an estimate that ignores wrapped lines, so the page grew by screens as the reader
+ * scrolled and a jump to a heading landed short of it (1,120 px in the sample paste). Rendering the
+ * code in full keeps every anchor where the outline points. Wrapped lines break between words, not
+ * inside them, and only a word wider than the column breaks.
+ */
+.body :global(.astryx-code-block) code {
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Long blocks render in chunks, each skipped while off screen. */
+.body :global(.astryx-code-block) code :where(*) {
+  content-visibility: visible;
+}

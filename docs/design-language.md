@@ -40,8 +40,7 @@ gentoozh.org is a navigation surface; its large type and card grid would push a
   but no sticky header, so how the header stays fixed is open.
 - **Outline.** A Markdown paste gets an outline from Astryx `Outline`, with
   heading anchors and scroll tracking. On wide screens it sits beside the
-  column; on a phone it opens in a drawer. Astryx 0.7.0 has `BottomSheet` and
-  `MobileNav` but `Drawer` only from 0.7.11, so the phone container is open.
+  column; below 1024 px it opens in an Astryx `Drawer` from the top bar.
 - **Links to a place.** Headings and code lines have anchors, so a link can
   point to a line.
 - **Pastes are not indexed.** Every paste page is `noindex`.
@@ -89,10 +88,31 @@ The rest of the axes the positioning leaves to decide:
 | Axis | Decision | State |
 | --- | --- | --- |
 | Density | Reading comfort over scanning density: body line height for long text, CJK line height for Chinese. | Decided by the positioning; values need owner approval |
-| Separation | Hairlines or elevation for panels. | Open |
+| Separation | Hairlines, no elevation and no boxes: an opaque top bar with a `--color-border` line under it, a line under the title row, and the outline rail set off by its label and track. | Proposed with the P1 first screen |
 | Hues | The accent plus the semantic set; the mind map adds a few low-saturation branch colours (see below). | Branch colour tokens open |
 | Motion | None decided beyond `web/AGENTS.md`. | Open |
 | Theme | Light, dark and follow-system. Upstream already stores a theme choice in a cookie. Whether the page resolves the theme before first paint from that cookie, and whether an OS switch mid-session moves the page, is open. | Open |
+
+## The reading page's first screen
+
+Proposed for the owner's approval with the P1 first screen; each value is a theme token or role.
+
+- **Top bar.** Opaque `--color-background-surface` with a hairline under it. Its
+  content edges are the page frame's: the product name starts where the paste
+  text starts, at every width.
+- **Title row.** The page's h1 takes the heading-2 role, one step above the body
+  and one below the paste's own first heading, which carries the page. Details
+  take the supporting role in `--color-text-secondary`. Copy is the view's one
+  primary button; Raw and Download are secondary buttons of the same size. On a
+  phone the buttons take their own row.
+- **Headings in the paste.** The paste's `#` renders as h2, because the title
+  row holds the h1, but keeps the look of the level the author wrote: h2 takes
+  the heading-1 role, h3 heading-2, and so on.
+- **Tables.** Cells use the label role, not the reading body size; the header
+  row stands on `--color-background-muted`; the first column stays on an opaque
+  surface while the rest scrolls, and takes at most 40% of a phone's width.
+- **Outline.** The rail carries an "On this page" label level with the title.
+  In the phone drawer each entry is at least the theme's touch height (44 px).
 
 ## Renderers
 
@@ -109,10 +129,12 @@ without mermaid never downloads mermaid.
 | Diagrams (P1b) | mermaid | ` ```mermaid ` blocks and `.mermaid` files, including flowcharts, sequence diagrams and `mindmap`; `securityLevel: 'strict'`. |
 | Mind map view (P1b) | Own drawing over a layout library | Any `.md` switches to it in one action; the switch lives in the URL (`?view=mindmap`). |
 
-Astryx 0.7.0's built-in tokenizer covers JavaScript and TypeScript, JSON,
-HTML, XML and SVG, CSS, SCSS and Less, Python, shell, PHP and Hack, YAML
-and Markdown. Rust, Go, C and C++, diff, INI and TOML need a tokenizer adapter loaded per language. Which tokenizer
-backs that adapter is open.
+Astryx 0.7.16's built-in tokenizer covers JavaScript and TypeScript, JSON,
+HTML, XML and SVG, CSS, SCSS and Less, Python, shell, PHP and Hack, YAML,
+Markdown, C and C++, SQL, Rust, Kotlin, Swift and Go; a ` ```diff ` fence
+renders as a unified diff. Any other language renders as plain text, with its
+name in the block's header. Tokenizers for more languages come later, loaded
+per language.
 
 A component Astryx lacks is reported with `astryx gap-report`. Component source
 is not copied and changed.
@@ -215,8 +237,7 @@ tables, side-by-side diffs, splitting multi-file pastes.
 | # | Item | Blocks |
 | --- | --- | --- |
 | D1 | How table headers stay fixed while Astryx 0.7.0 `Table` has no sticky header (gap report, an Astryx upgrade, or our own CSS). | P1 |
-| D2 | The phone outline container: `BottomSheet` in 0.7.0 or `Drawer` after an upgrade to 0.7.11. | P1 |
-| D3 | The tokenizer behind the adapter for Rust, Go, C and C++, diff, INI and TOML. | P1 |
+| D3 | The tokenizer for languages Astryx 0.7.16 does not cover (INI, TOML and others), loaded per language. | P1 |
 | D4 | Which Astryx token names the theme package exports, and the tokens for mind map branch colours. | P1, P1b |
 | D5 | Separation device (hairlines or elevation) and motion. | P1 first screen |
 | D6 | Theme and locale resolution before first paint, and whether an OS theme switch moves an open page. | P1 |
