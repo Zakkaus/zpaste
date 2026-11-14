@@ -146,7 +146,7 @@ fn found(location: &str) -> Response {
 
 /// The shell for `reading` at `/<path>`. Its policy admits the web app's run-time styles and the
 /// images a paste links (invariant 17). The page can depend on the reader's cookie (`can_edit`),
-/// so no shared cache keeps it and the reader's own revalidates it.
+/// so no cache keeps it.
 fn reading_page(
     state: &AppState,
     status: StatusCode,
@@ -175,10 +175,7 @@ fn reading_page(
                 HeaderValue::from_static("text/html; charset=utf-8"),
             ),
             (header::CONTENT_SECURITY_POLICY, web.csp.clone()),
-            (
-                header::CACHE_CONTROL,
-                HeaderValue::from_static("private, no-cache"),
-            ),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
         ],
         html,
     )

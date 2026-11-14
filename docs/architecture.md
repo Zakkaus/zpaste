@@ -223,8 +223,8 @@ malformed id gets the shell with no paste and 404 (A4).
 Pastes are served with `noindex`; the help page on gentoozh.org stays
 indexable.
 
-The shell is `private, no-cache`, because `can_edit` depends on the reader's
-cookie. The `?owner=` answer is a 302 with `no-store`, also when the token
+The shell is `no-store`, because `can_edit` depends on the reader's
+credentials. The `?owner=` answer is a 302 with `no-store`, also when the token
 fails, so no token stays in the URL.
 
 `pnpm build` writes `web/dist`, and `crates/wastebin_server/build.rs` embeds

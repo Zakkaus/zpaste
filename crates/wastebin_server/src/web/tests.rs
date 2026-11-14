@@ -86,7 +86,7 @@ async fn plain_paste_is_embedded_with_preview_and_noscript_copy() {
         headers[header::CONTENT_SECURITY_POLICY],
         WEB.csp.to_str().unwrap()
     );
-    assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache");
+    assert_eq!(headers[header::CACHE_CONTROL], "no-store");
     assert!(
         headers[header::CONTENT_TYPE]
             .to_str()
