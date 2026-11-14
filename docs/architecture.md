@@ -284,8 +284,10 @@ gzpaste ships with P1.
 
 The contract pipeline: utoipa annotations on the handlers produce the OpenAPI
 file, committed to the repository; openapi-typescript turns it into frontend
-types; openapi-fetch is the typed client. All three are pinned, and the
-versions are chosen in P0 (open until then). CI regenerates both outputs and
+types; openapi-fetch is the typed client. All three are pinned (A1, settled
+in P0): utoipa 6.0.0, openapi-typescript 7.13.0 with TypeScript 5.9.3, and
+openapi-fetch 0.17.0; `docs/api/README.md` records the check and what utoipa
+cannot express. CI regenerates both outputs and
 compares them byte for byte, type-checks the frontend, and runs a contract test
 that starts the server in-process and sends every row of the endpoint table
 implemented so far, each error status included, validating status, headers
@@ -493,7 +495,7 @@ Points the plan does not decide. Each blocks the phase named.
 
 | # | Item | Blocks |
 | --- | --- | --- |
-| A1 | Version tags of utoipa, openapi-typescript and openapi-fetch that work together. | P0 (contract draft) |
+| A1 | Settled 2026-11-15: utoipa 6.0.0, openapi-typescript 7.13.0 (with TypeScript 5.9.3) and openapi-fetch 0.17.0 work together; evidence and gaps in `docs/api/README.md`, "Generating the contract in P1". | P0 (contract draft) |
 | A2 | Image version scheme for `ghcr.io/zakkaus/zpaste:<version>`. | P0 (CI) |
 | A3 | Values of the derivation concurrency limit and per-IP rate. | P1 |
 | A4 | Whether the shell answers HTTP 404 or 200 for a missing or expired id (the app shows the same screen either way). | P1 |
@@ -502,6 +504,6 @@ Points the plan does not decide. Each blocks the phase named.
 | A7 | The test domain on which the new frontend is accepted before the switch (plan section 七). | P1 |
 | A8 | Backup schedule for `/var/lib/zpaste`. | P1 release |
 | A9 | Who tracks upstream security fixes (plan section 四 asks for one named person). | P1 |
-| A10 | The multiple of `WASTEBIN_MAX_BODY_SIZE` that caps one paste's history. | P2 |
+| A10 | The multiple of `WASTEBIN_MAX_BODY_SIZE` that caps one paste's history, and whether that cap may leave fewer than 20 versions. Recommended: 4, trimming the oldest versions until both limits hold; alternative: keep 20 and refuse the write with 413 (owner ruling pending, `docs/api/README.md`). | P2 |
 | A11 | Whether history may branch (left to Zephyr). | After P2 |
 | A12 | How a squatted slug is reclaimed without an admin panel, and what removes empty workspaces after 30 days. | P2b |
