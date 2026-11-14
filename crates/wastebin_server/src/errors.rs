@@ -1,7 +1,7 @@
 use std::num::TryFromIntError;
 
 use axum::Json;
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode};
 use serde::Serialize;
 
 use wastebin_core::{crypto, db, id};
@@ -28,6 +28,9 @@ pub(crate) enum Error {
     MalformedForm,
 }
 
+/// `Retry-After` of a 429 from the key-derivation limit, in seconds: about one derivation.
+pub(crate) const RETRY_AFTER: HeaderValue = HeaderValue::from_static("1");
+
 #[derive(Serialize)]
 pub(crate) struct JsonError {
     pub message: String,
@@ -40,6 +43,9 @@ impl From<Error> for StatusCode {
     fn from(err: Error) -> Self {
         match err {
             Error::Database(db::Error::NotFound) => StatusCode::NOT_FOUND,
+            Error::Database(db::Error::Crypto(crypto::Error::Busy)) => {
+                StatusCode::TOO_MANY_REQUESTS
+            }
             Error::Database(
                 db::Error::Delete | db::Error::Crypto(crypto::Error::ChaCha20Poly1305Decrypt),
             ) => StatusCode::FORBIDDEN,

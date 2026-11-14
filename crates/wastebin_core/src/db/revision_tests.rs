@@ -38,6 +38,7 @@ fn spawn(handler: Handler) -> Database {
     tokio::task::spawn_blocking(|| handler.run());
     Database {
         sender: sender.to_async(),
+        kdf: KdfLimit::default(),
     }
 }
 
@@ -49,7 +50,7 @@ async fn stored(text: &str, password: Option<&str>) -> Result<write::DatabaseEnt
     }
     .compress()
     .await?
-    .encrypt()
+    .encrypt(&KdfLimit::default())
     .await
 }
 

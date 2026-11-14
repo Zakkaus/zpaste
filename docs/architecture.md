@@ -287,12 +287,14 @@ file, committed to the repository; openapi-typescript turns it into frontend
 types; openapi-fetch is the typed client. All three are pinned (A1, settled
 in P0): utoipa 6.0.0, openapi-typescript 7.13.0 with TypeScript 5.9.3, and
 openapi-fetch 0.17.0; `docs/api/README.md` records the check and what utoipa
-cannot express. CI regenerates both outputs and
-compares them byte for byte, type-checks the frontend, and runs a contract test
-that starts the server in-process and sends every row of the endpoint table
-implemented so far, each error status included, validating status, headers
-and body against the OpenAPI file. The regeneration check alone cannot show
-that a handler answers as the file says, which is why the contract test exists.
+cannot express. Current: `cargo test` regenerates the OpenAPI document and
+fails when the committed file differs from it as a parsed structure, and runs
+a contract test that starts the server in-process and sends every row of the
+endpoint table implemented so far, each error status included, validating
+status, headers and body against the generated document. Target, P1: CI also
+regenerates the frontend types and type-checks the frontend. The regeneration
+check alone cannot show that a handler answers as the file says, which is why
+the contract test exists.
 
 ## Identity model
 
@@ -323,9 +325,10 @@ identity's gives one 400, so it reveals nothing about the id.
 
 Current: the `revisions` table exists (migration 8). Every create writes
 version 1 in the same transaction as the paste, and the migration wrote version 1
-for every older paste, so the `version_id` and `ETag` of a create response will
-be real from the first day. Target, P1: the `/v1` responses carry them. Target,
-P2: edits.
+for every older paste, so the `version_id` and `ETag` of a create response are
+real from the first day. Current: `POST /v1/pastes`, `GET /v1/pastes/{id}` and
+`GET /v1/pastes/{id}/content` carry them, read from the head revision without
+consuming the paste. Target, P2: edits.
 
 A version id is a hash chain, as in git:
 
@@ -373,8 +376,10 @@ flowchart TD
   deleted with the paste: a trigger on `entries` removes the revisions on every
   delete, burn and purge included (current). History endpoints check existence
   and expiry before permission.
-- One paste's total history is capped at a multiple of
-  `WASTEBIN_MAX_BODY_SIZE`. The multiple is open.
+- One paste's total history is capped at 4 × `WASTEBIN_MAX_BODY_SIZE` (owner
+  ruling A10, 2026-11-15). After each write the oldest versions are trimmed
+  until both the 20-version and the size limit hold, so a paste may keep fewer
+  than 20 versions; the cap never refuses a write.
 - The migration backfills a first version for every existing paste from its
   stored bytes, nonce and title, without decrypting and without consuming
   burn-after-reading pastes. `extension` and `created_at` stay empty for them.
@@ -464,8 +469,12 @@ rollback past a migration restores the backup; see [workflow.md](workflow.md).
 - **Password key derivation.** Upstream's Argon2i uses 64 MiB of memory, 10
   iterations and 4 lanes per derivation. The parameters stay, because changing
   them would make existing encrypted pastes unreadable. The shared concurrency
-  limit and the per-IP rate limit (invariants 10, 11) bound the memory. Their
-  values are open and belong in `REQUIREMENTS.md`.
+  limit and the per-IP rate limit (invariants 10, 11) bound the memory.
+  Current: the concurrency limit is built in `Database` (`crypto::KdfLimit`),
+  so every derivation path, `/v1` and legacy, passes through it. It allows
+  `WASTEBIN_KDF_CONCURRENCY` derivations at once (default 2, 128 MiB); a
+  request waits up to 1 s for a slot, then gets 429 with `Retry-After: 1`.
+  The per-IP rate is not built yet (P1, A3).
 - **Two rate-limit layers.** Traefik limits every request (average 8, burst 40).
   Zpaste limits only the derivation paths. Both stay.
 - **Origin exposure.** Target: the origin accepts Cloudflare only, so the per-IP limit
@@ -515,13 +524,13 @@ Points the plan does not decide. Each blocks the phase named.
 | --- | --- | --- |
 | A1 | Settled 2026-11-15: utoipa 6.0.0, openapi-typescript 7.13.0 (with TypeScript 5.9.3) and openapi-fetch 0.17.0 work together; evidence and gaps in `docs/api/README.md`, "Generating the contract in P1". | P0 (contract draft) |
 | A2 | Image version scheme for `ghcr.io/zakkaus/zpaste:<version>`. | P0 (CI) |
-| A3 | Values of the derivation concurrency limit and per-IP rate. | P1 |
+| A3 | Value of the per-IP derivation rate, and confirmation of the concurrency default (2, `WASTEBIN_KDF_CONCURRENCY`). | P1 |
 | A4 | Whether the shell answers HTTP 404 or 200 for a missing or expired id (the app shows the same screen either way). | P1 |
 | A5 | Fate of `POST /{id}`, `POST /new`, `POST /delete/{id}` and `/theme` once the upstream forms are gone. | P1 |
 | A6 | Fate of `wastebin_highlight` and `wastebin_theme_showcase` once the server stops highlighting. | P1 |
 | A7 | The test domain on which the new frontend is accepted before the switch (plan section 七). | P1 |
 | A8 | Backup schedule for `/var/lib/zpaste`. | P1 release |
 | A9 | Who tracks upstream security fixes (plan section 四 asks for one named person). | P1 |
-| A10 | The multiple of `WASTEBIN_MAX_BODY_SIZE` that caps one paste's history, and whether that cap may leave fewer than 20 versions. Recommended: 4, trimming the oldest versions until both limits hold; alternative: keep 20 and refuse the write with 413 (owner ruling pending, `docs/api/README.md`). | P2 |
+| A10 | Settled 2026-11-15 (「單一 paste 的歷史總大小 可以」): the cap is 4 × `WASTEBIN_MAX_BODY_SIZE` per paste, and trimming the oldest versions until both limits hold may leave fewer than 20; see "Revisions" and `docs/api/README.md`, "Owner rulings". | P2 |
 | A11 | Whether history may branch (left to Zephyr). | After P2 |
 | A12 | How a squatted slug is reclaimed without an admin panel, and what removes empty workspaces after 30 days. | P2b |

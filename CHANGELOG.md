@@ -19,11 +19,25 @@ prerelease and the image tag `0.1.0-beta.1`.
   burn-after-reading paste. A paste's versions are deleted with it. The
   database file grows by about the size of the stored pastes, and an older
   executable refuses the migrated database, so a rollback restores the backup.
+- The `/v1` JSON API, first operations: `GET /v1`, `POST /v1/pastes`,
+  `GET /v1/pastes/{id}`, `DELETE /v1/pastes/{id}` and
+  `GET /v1/pastes/{id}/content` (plain pastes; encrypted and
+  burn-after-reading pastes answer 409 and are never consumed). Every `/v1`
+  response carries `X-Request-Id` and `Cache-Control: no-store`, and every
+  `/v1` error, the framework's included, uses one JSON shape; a request that
+  outlives `WASTEBIN_HTTP_TIMEOUT` is 408 with type `timeout`.
+  `docs/api/openapi.yaml` is now generated from the handlers.
+- Password key derivation is admission controlled. Every request that derives
+  a key (an encrypted create on `/v1` or the legacy routes, a legacy read with
+  a password) takes one of `WASTEBIN_KDF_CONCURRENCY` slots (default 2, about
+  128 MiB of Argon2 memory). A request that finds no free slot within 1 s is
+  429 with `Retry-After: 1`, and nothing is derived, written or consumed.
 
 ### Changed
 
 - The server executable is named `zpaste`, and log lines name `zpaste` as their
   target. Configuration variables keep the `WASTEBIN_` prefix.
+- HTML pages name Zpaste in `<meta name="generator">`.
 - The container image runs as uid and gid 10001.
 - CI builds the image on every pull request and pushes it to
   `ghcr.io/zakkaus/zpaste` from main (`main` and `sha-<short>`). A version tag

@@ -86,9 +86,13 @@ pub async fn post(
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+    use std::time::Duration;
+
     use crate::handlers::extract::PASSWORD_HEADER_NAME;
-    use crate::test_helpers::{Client, StoreCookies};
+    use crate::test_helpers::{Client, Settings, StoreCookies};
     use reqwest::StatusCode;
+    use wastebin_core::crypto::KdfLimit;
     use wastebin_core::db::write::Entry;
 
     #[test]
@@ -310,7 +314,15 @@ mod tests {
 
     #[tokio::test]
     async fn insert_encrypted() -> Result<(), Box<dyn std::error::Error>> {
-        let client = Client::new(StoreCookies(false)).await;
+        let kdf = KdfLimit::new(NonZeroUsize::MIN, Duration::ZERO);
+        let client = Client::with_settings(
+            StoreCookies(false),
+            Settings {
+                kdf: kdf.clone(),
+                ..Settings::default()
+            },
+        )
+        .await;
         let password = "SuperSecretPassword";
 
         let entry = Entry {
@@ -319,17 +331,34 @@ mod tests {
             ..Default::default()
         };
 
+        // The legacy create and read share the `/v1` derivation limit.
+        let held = kdf.acquire().await?;
+        let res = client.post_json().json(&entry).send().await?;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            res.headers().get(reqwest::header::RETRY_AFTER),
+            Some(&reqwest::header::HeaderValue::from_static("1"))
+        );
+        drop(held);
+
         let res = client.post_json().json(&entry).send().await?;
         assert_eq!(res.status(), StatusCode::OK);
 
         let payload = res.json::<super::RedirectResponse>().await?;
+        let read = || {
+            client
+                .get(&format!("/raw{}", payload.path))
+                .header(PASSWORD_HEADER_NAME, password)
+                .send()
+        };
 
-        let res = client
-            .get(&format!("/raw{}", payload.path))
-            .header(PASSWORD_HEADER_NAME, password)
-            .send()
-            .await?;
+        let held = kdf.acquire().await?;
+        let res = read().await?;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(res.headers().contains_key(reqwest::header::RETRY_AFTER));
+        drop(held);
 
+        let res = read().await?;
         assert_eq!(res.status(), StatusCode::OK);
         assert_eq!(res.text().await?, "FooBarBaz");
 

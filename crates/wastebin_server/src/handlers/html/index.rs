@@ -6,6 +6,17 @@ use crate::i18n::Lang;
 use crate::{Highlighter, Page, handlers::extract::Theme};
 
 /// GET handler for the index page.
+#[cfg_attr(test, utoipa::path(
+    get,
+    path = "/",
+    tag = "pages",
+    operation_id = "getNewPastePage",
+    summary = "New paste page",
+    description = "HTML shell of the web app's new paste page. Not part of the JSON API.",
+    extensions(("x-phase" = json!("P1"))),
+    security(()),
+    responses((status = 200, description = "The page.", body = String, content_type = "text/html")),
+))]
 pub async fn get(
     State(page): State<Page>,
     State(highlighter): State<Highlighter>,
