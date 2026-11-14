@@ -197,8 +197,10 @@ Chinese.
   not the interface locale (D11): `web/src/reader/pasteLanguage.ts` counts, in
   the first 20,000 characters, the characters that exist in only one script
   (313 frequent pairs such as 這/这 and 會/会) and marks the paste's text, not the
-  chrome, `lang="zh-Hant"` or `lang="zh-Hans"` by the larger count. It sets no
-  language when the counts are even, when there is no Chinese, when Latin
+  chrome, `lang="zh-Hant"` or `lang="zh-Hans"` by the larger count, when that
+  count is at least five and at least twice the other. It sets no language
+  below that, so Japanese written in kanji alone (`設定項目`, whose forms are
+  also Traditional) keeps the page's; nor when there is no Chinese, when Latin
   letters outnumber Han characters twenty to one (an English paste quoting a
   Chinese word) or when kana stand beside the kanji (Japanese).
   `PasteContent.module.css` gives each language the theme's faces of its

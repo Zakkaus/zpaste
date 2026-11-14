@@ -23,11 +23,21 @@ const SIMPLIFIED =
   '论讲护负财货质费资赛购赞军软载较轻转办农连运达远适遗边邮乡医针钢录镜铁阅陈陆险随隐难杂鸡灵静响顶项顺须预领频额颜类显风飞' +
   '饭馆马验惊闹鱼鸟丽黄齐齿龙';
 
-/** +1 for a Traditional-only character, -1 for a Simplified-only one. */
+/** 1 for a Traditional-only character, -1 for a Simplified-only one. */
 const FORMS: ReadonlyMap<number, 1 | -1> = new Map([
   ...[...TRADITIONAL].map(char => [char.charCodeAt(0), 1] as const),
   ...[...SIMPLIFIED].map(char => [char.charCodeAt(0), -1] as const),
 ]);
+
+/**
+ * The fewest characters of one script that mark a paste. Japanese written in kanji alone (`設定項目`)
+ * uses forms that are also Traditional, and a short run of them is not evidence of Chinese; a sentence
+ * of Chinese has several.
+ */
+const MIN_FORMS = 5;
+
+/** The leading script needs this many times the other's count, so a paste quoting the other script keeps its own. */
+const MARGIN = 2;
 
 /** Only the start of a paste is read: enough to decide, and the cost stays flat for a large paste. */
 export const SCAN_LIMIT = 20_000;
@@ -44,13 +54,15 @@ export type PasteLanguage = 'zh-Hant' | 'zh-Hans';
 /**
  * `zh-Hant` when the paste's Chinese leans Traditional, `zh-Hans` when it leans Simplified, or
  * undefined (keep the page's language) when it has no Chinese, is mostly Latin text or Japanese (kana
- * beside the kanji), or uses as many characters of each script.
+ * beside the kanji), has fewer than MIN_FORMS characters of either script, or does not lean MARGIN to
+ * one towards either.
  */
 export function pasteLanguage(text: string): PasteLanguage | undefined {
   let han = 0;
   let latin = 0;
   let kana = 0;
-  let lean = 0;
+  let traditional = 0;
+  let simplified = 0;
   const end = Math.min(text.length, SCAN_LIMIT);
   for (let index = 0; index < end; index++) {
     const code = text.charCodeAt(index);
@@ -61,9 +73,13 @@ export function pasteLanguage(text: string): PasteLanguage | undefined {
       kana++;
     } else if ((code >= 0x3400 && code <= 0x9fff) || (code >= 0xf900 && code <= 0xfaff)) {
       han++;
-      lean += FORMS.get(code) ?? 0;
+      const form = FORMS.get(code);
+      if (form === 1) traditional++;
+      else if (form === -1) simplified++;
     }
   }
   if (han === 0 || latin > han * LATIN_PER_HAN || kana * 4 >= han) return undefined;
-  return lean > 0 ? 'zh-Hant' : lean < 0 ? 'zh-Hans' : undefined;
+  if (traditional >= MIN_FORMS && traditional >= simplified * MARGIN) return 'zh-Hant';
+  if (simplified >= MIN_FORMS && simplified >= traditional * MARGIN) return 'zh-Hans';
+  return undefined;
 }

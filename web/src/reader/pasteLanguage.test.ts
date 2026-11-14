@@ -24,6 +24,17 @@ describe('paste language', () => {
     expect(pasteLanguage('中文文本')).toBeUndefined();
   });
 
+  it('needs several characters of one script and a clear lead before it marks a paste', () => {
+    // Japanese in kanji alone: 設 and 項 are Traditional forms, but two are not evidence.
+    expect(pasteLanguage('設定項目')).toBeUndefined();
+    expect(pasteLanguage('設定項目一覧')).toBeUndefined();
+    expect(pasteLanguage('這個說們')).toBeUndefined();
+    expect(pasteLanguage('這個說們為')).toBe('zh-Hant');
+    // Five against three is no clear lead; six against three is.
+    expect(pasteLanguage('這個說們為这个说')).toBeUndefined();
+    expect(pasteLanguage('這個說們為時这个说')).toBe('zh-Hant');
+  });
+
   it('keeps the page language for English, code and Japanese', () => {
     expect(pasteLanguage('# Release checklist\n\nTag the release once every gate passes.')).toBeUndefined();
     expect(pasteLanguage('fn main() {\n    println!("{}", 1 + 2);\n}\n')).toBeUndefined();
