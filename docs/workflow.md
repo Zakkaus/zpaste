@@ -46,7 +46,7 @@ command that does not exist yet, the branch that builds the check adds it to
 
 | Phase | Branches |
 | --- | --- |
-| P0 Preparation | `p0/rebrand`, `p0/rules-kit` (merged); `p0/ci`, `p0/docs`; the OpenAPI draft branch is not named yet |
+| P0 Preparation | `p0/rebrand`, `p0/rules-kit` (merged); `p0/ci`, `p0/docs`, `p0/openapi` |
 | P1 `/v1` reading endpoints and reading page | `p1/<topic>` |
 | P1b mermaid and mind map | `p1b/<topic>` |
 | P2 Edits and versions | `p2/<topic>` |

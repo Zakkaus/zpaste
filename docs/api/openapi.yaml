@@ -1,0 +1,1713 @@
+openapi: 3.1.0
+info:
+  title: Zpaste API
+  version: 0.1.0-draft
+  summary: Paste service API, OpenStack style, under /v1.
+  description: |
+    Draft contract for review (plan section 四). It is written by hand; from P1 on,
+    utoipa generates this file from the Rust handlers and the hand-written copy is
+    retired (see `docs/api/README.md`).
+
+    Conventions that hold for every `/v1` operation:
+
+    - Request and response bodies are wrapped in the resource name
+      (`{"paste": {...}}`, `{"pastes": [...]}`). Response bodies are closed: a
+      field not listed here is a contract violation.
+    - Every response carries `X-Request-Id` and `Cache-Control: no-store`.
+    - Every error, including the framework's own rejections, uses the `Error`
+      schema. A missing or expired paste is always 404.
+    - 401 means no or invalid credentials; 403 means valid credentials that do not
+      own the resource, or a cookie request without a matching `Origin`.
+    - Each operation carries `x-phase`: the phase that implements it (P1, P2, P2b).
+
+    Credential selection, the same on every operation:
+
+    1. A request with an `Authorization` header is judged by that header alone.
+       The cookie is ignored, and the two never add up to more authority.
+    2. A Bearer token that fails verification is 401. The server never falls back
+       to the cookie or to an anonymous request.
+    3. Without `Authorization`, the `uid` cookie decides. A cookie whose signature
+       fails counts as absent, as in upstream's signed cookie jar.
+    4. A request that carries the cookie and writes (creates, edits, deletes,
+       consumes a burn-after-reading paste) must send `Origin` equal to the
+       configured public URL; otherwise it is 403 before anything else is checked.
+    5. Credential and `Origin` failures are answered before any password key
+       derivation starts.
+
+    The cookie holds several identities. An operation on one resource is allowed
+    when one of them owns it; a create uses the first. An operation that joins two
+    resources (a paste and a workspace) requires both to belong to the same
+    identity, not merely to identities the caller holds.
+  license:
+    name: MIT
+    identifier: MIT
+servers:
+  - url: https://paste.gentoozh.org
+    description: Production
+tags:
+  - name: pages
+    description: HTML pages served by the Rust shell.
+  - name: versions
+    description: API version discovery.
+  - name: pastes
+    description: Paste metadata, listing and deletion.
+  - name: content
+    description: Reading and replacing paste content.
+  - name: history
+    description: Stored versions of a paste.
+  - name: workspaces
+    description: Named groups of pastes shared by one link.
+
+paths:
+  /:
+    get:
+      tags: [pages]
+      operationId: getNewPastePage
+      summary: New paste page
+      description: HTML shell of the web app's new paste page. Not part of the JSON API.
+      x-phase: P1
+      security: []
+      responses:
+        '200':
+          description: The page.
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /v1:
+    get:
+      tags: [versions]
+      operationId: getVersion
+      summary: Show the API version
+      x-phase: P1
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: The current API version.
+          headers:
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionDocument'
+              example:
+                version: {id: v1, status: CURRENT}
+        default: {$ref: '#/components/responses/Error'}
+
+  /v1/pastes:
+    post:
+      tags: [pastes]
+      operationId: createPaste
+      summary: Create a paste
+      description: |
+        Credentials are optional. With a valid Bearer token or cookie the new
+        paste joins that identity, and the response carries no `owner_token` and
+        sets no cookie. An invalid Bearer token is 401; the server never falls back
+        to a new identity.
+
+        Without credentials the server mints a new identity. How it hands the
+        identity over depends on the caller:
+
+        - A browser create, recognised by an `Origin` equal to the configured
+          public URL, gets `Set-Cookie: uid=...; HttpOnly; Secure; SameSite=Lax;
+          Path=/` and no `owner_token` in the body, so page scripts never see the
+          token.
+        - Any other create (no `Origin`, as from curl and gzpaste) gets
+          `owner_token` in the body, once, and no cookie.
+
+        A create is rate limited (429) only when it sets `password`, because only
+        then does it derive a key. The general create rate is the proxy's.
+      x-phase: P1
+      security:
+        - {}
+        - ownerToken: []
+        - ownerCookie: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasteCreateRequest'
+            example:
+              paste:
+                content: "# Plan\n"
+                extension: md
+                title: Plan
+                expires_in: 604800
+                burn_after_reading: false
+                password: null
+      responses:
+        '201':
+          description: Created. `owner_token` is present only when a non-browser create minted a new identity.
+          headers:
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+            Location: {$ref: '#/components/headers/PasteLocation'}
+            ETag: {$ref: '#/components/headers/ETag'}
+            Set-Cookie:
+              description: Only on a browser create that minted a new identity. Carries the signed `uid` cookie.
+              required: false
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PasteCreatedDocument'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Error'}
+    get:
+      tags: [pastes]
+      operationId: listPastes
+      summary: List the caller's pastes
+      description: |
+        Filters by identity and expiry first, then pages. Order is newest first by
+        `(created_at, id)`; pastes from before the `created_at` column sort last.
+        `pastes_links` holds only a `next` link, which keeps `owner=me` and `limit`.
+        With the cookie, `me` is every identity the cookie holds.
+      x-phase: P1
+      security:
+        - ownerToken: []
+        - ownerCookie: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - name: owner
+          in: query
+          required: true
+          description: Only `me` is defined.
+          schema:
+            type: string
+            enum: [me]
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: marker
+          in: query
+          required: false
+          description: |
+            Id of the last paste on the previous page. A marker that is malformed,
+            deleted, expired or owned by another identity gives the same 400.
+          schema:
+            $ref: '#/components/schemas/PasteId'
+      responses:
+        '200':
+          description: One page of pastes.
+          headers:
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PasteListDocument'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        default: {$ref: '#/components/responses/Error'}
+
+  /v1/pastes/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PasteIdPath'
+    get:
+      tags: [pastes]
+      operationId: showPaste
+      summary: Show paste metadata
+      description: |
+        Returns whitelisted fields only: never the uid, and no title for an
+        encrypted paste. Reading metadata never consumes a burn-after-reading paste.
+      x-phase: P1
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: The paste.
+          headers:
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+            ETag: {$ref: '#/components/headers/ETag'}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PasteDocument'
+        '404': {$ref: '#/components/responses/NotFound'}
+        default: {$ref: '#/components/responses/Error'}
+    patch:
+      tags: [pastes]
+      operationId: updatePaste
+      summary: Change the title
+      description: |
+        Follows the edit rules of plan section 四, in this order: credentials and
+        `Origin` (401, 403); burn-after-reading is 409; an encrypted paste needs
+        `X-Paste-Password`, and a password that cannot decrypt the current content
+        is 401 and writes nothing. Then, in one transaction: an `If-Match` that
+        matches no current version is 412; a title equal to the current one is 200
+        with no new version; otherwise a new version is written. Expiry does not
+        change. 429 applies only to an encrypted paste, which derives a key.
+      x-phase: P2
+      security:
+        - ownerToken: []
+        - ownerCookie: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/PastePasswordHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasteUpdateRequest'
+            example:
+              paste: {title: Plan v2}
+      responses:
+        '200':
+          description: Updated, or unchanged when the title already matched.
+          headers:
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+            ETag: {$ref: '#/components/headers/ETag'}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PasteDocument'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/BurnNotEditable'}
+        '412': {$ref: '#/components/responses/PreconditionFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Error'}
+    delete:
+      tags: [pastes]
+      operationId: deletePaste
+      summary: Delete a paste
+      description: Deletes the paste and its whole history.
+      x-phase: P1
+      security:
+        - ownerToken: []
+        - ownerCookie: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '204':
+          description: Deleted.
+          headers:
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        default: {$ref: '#/components/responses/Error'}
+
+  /v1/pastes/{id}/content:
+    parameters:
+      - $ref: '#/components/parameters/PasteIdPath'
+    get:
+      tags: [content]
+      operationId: getContent
+      summary: Read the content of a plain paste
+      description: |
+        Returns the raw text of a paste that is neither encrypted nor
+        burn-after-reading. For an encrypted paste (burn or not) it answers 409
+        `password_required`; for a burn-after-reading paste, 409
+        `confirmation_required`. It consumes nothing.
+      x-phase: P1
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: The current content, UTF-8.
+          headers:
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+            ETag: {$ref: '#/components/headers/ETag'}
+          content:
+            text/plain; charset=utf-8:
+              schema:
+                type: string
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ReadPrecondition'}
+        default: {$ref: '#/components/responses/Error'}
+    post:
+      tags: [content]
+      operationId: readContent
+      summary: Read content with a password or a burn confirmation
+      description: |
+        No credentials are needed, but a request that carries the `uid` cookie
+        without a matching `Origin` is 403 before the paste is looked up, because
+        a burn read is a write.
+
+        The only way to consume a burn-after-reading paste: it is consumed once,
+        atomically, when the request has `confirm_burn: true` (and, if encrypted,
+        the right `password`), and is 404 afterwards. Of two concurrent confirmed
+        requests, one gets the content and the other 404. A client that gets 404
+        on a retry must treat the paste as possibly read and must not retry on its
+        own.
+
+        | Paste | Body | Answer |
+        | --- | --- | --- |
+        | encrypted | no `password` | 409 `password_required` |
+        | encrypted | wrong `password` | 401 `wrong_password` |
+        | encrypted, not burn | right `password` | 200 |
+        | burn, not encrypted | no `confirm_burn` | 409 `confirmation_required` |
+        | burn, not encrypted | `confirm_burn: true` | 200, consumed |
+        | encrypted and burn | right `password`, no `confirm_burn` | 409 `confirmation_required`; nothing returned or consumed |
+        | encrypted and burn | right `password` and `confirm_burn: true` | 200, consumed |
+
+        Every request that carries `password` counts against the shared
+        derivation limit (429), the confirmation step included.
+      x-phase: P1
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContentReadRequest'
+            examples:
+              password:
+                value: {password: hunter2}
+              burn:
+                value: {confirm_burn: true}
+              both:
+                value: {password: hunter2, confirm_burn: true}
+      responses:
+        '200':
+          description: The current content.
+          headers:
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+            ETag: {$ref: '#/components/headers/ETag'}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContentDocument'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/WrongPassword'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ReadPrecondition'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Error'}
+    put:
+      tags: [content]
+      operationId: replaceContent
+      summary: Replace the content
+      description: |
+        The body is the raw new text. Same edit rules and order as
+        `PATCH /v1/pastes/{id}`: burn-after-reading is 409; an encrypted paste
+        needs `X-Paste-Password` and is re-encrypted with the same password and a
+        new nonce; an `If-Match` that matches no current version is 412; content
+        and title equal to the current version give 200 with no new version;
+        otherwise a new version is written. Expiry does not change.
+
+        After the write, history is trimmed, oldest first, until both limits hold:
+        at most 20 versions, the current one included, and the history total limit
+        of architecture A10. Trimming never refuses the write. The A10 multiple,
+        and whether that limit may leave fewer than 20 versions, await the owner
+        (`docs/api/README.md`, "Pending owner rulings").
+      x-phase: P2
+      security:
+        - ownerToken: []
+        - ownerCookie: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/PastePasswordHeader'
+      requestBody:
+        required: true
+        content:
+          text/plain; charset=utf-8:
+            schema:
+              type: string
+      responses:
+        '200':
+          description: Replaced, or unchanged when the content already matched.
+          headers:
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+            ETag: {$ref: '#/components/headers/ETag'}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PasteDocument'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/BurnNotEditable'}
+        '412': {$ref: '#/components/responses/PreconditionFailed'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Error'}
+
+  /v1/pastes/{id}/versions:
+    parameters:
+      - $ref: '#/components/parameters/PasteIdPath'
+    get:
+      tags: [history]
+      operationId: listVersions
+      summary: List stored versions
+      description: |
+        Newest first; at most 20 versions are kept, so there is no paging. A
+        missing or expired paste is 404, checked first. A burn-after-reading paste
+        has no history endpoints: 409 `burn_no_history`.
+      x-phase: P2
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: The stored versions.
+          headers:
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionListDocument'
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/BurnNoHistory'}
+        default: {$ref: '#/components/responses/Error'}
+
+  /v1/pastes/{id}/versions/{vid}/content:
+    parameters:
+      - $ref: '#/components/parameters/PasteIdPath'
+      - name: vid
+        in: path
+        required: true
+        description: A `version_id` from this paste's version list.
+        schema:
+          $ref: '#/components/schemas/VersionId'
+    post:
+      tags: [history]
+      operationId: readVersionContent
+      summary: Read the content of one stored version
+      description: |
+        The version is looked up by the pair `(id, vid)`: a `vid` of another
+        paste, or one trimmed from history, is 404. Checks run in this order: the
+        paste exists and has not expired (404); the paste is not
+        burn-after-reading (409 `burn_no_history`; this endpoint never consumes
+        anything); the version exists (404); then the password.
+
+        The body is `{}` for a plain paste and `{"password": ...}` for an
+        encrypted one. A missing password is 409 `password_required`, a wrong one
+        401; a request with a password counts against the shared derivation limit
+        (429). `POST` serves every version, plain ones included, so that one
+        client call covers both cases.
+      x-phase: P2
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VersionReadRequest'
+            examples:
+              plain:
+                value: {}
+              encrypted:
+                value: {password: hunter2}
+      responses:
+        '200':
+          description: The content of that version; `ETag` is that version's id.
+          headers:
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+            ETag: {$ref: '#/components/headers/ETag'}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContentDocument'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/WrongPassword'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/VersionReadConflict'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Error'}
+
+  /v1/workspaces:
+    post:
+      tags: [workspaces]
+      operationId: createWorkspace
+      summary: Create a workspace
+      description: |
+        Slugs are first come, first served. The workspace belongs to the identity
+        that creates it (with the cookie, its first). An omitted title defaults to
+        the slug; the title rules await the owner (`docs/api/README.md`).
+      x-phase: P2b
+      security:
+        - ownerToken: []
+        - ownerCookie: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceCreateRequest'
+            example:
+              workspace: {slug: v2raya, title: v2rayA triage}
+      responses:
+        '201':
+          description: Created.
+          headers:
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+            Location:
+              description: Path of the new workspace, `/v1/workspaces/{slug}`.
+              required: true
+              schema:
+                type: string
+                example: /v1/workspaces/v2raya
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceDocument'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/SlugTaken'}
+        default: {$ref: '#/components/responses/Error'}
+
+  /v1/workspaces/{slug}:
+    parameters:
+      - $ref: '#/components/parameters/SlugPath'
+    get:
+      tags: [workspaces]
+      operationId: showWorkspace
+      summary: Show a workspace and its entries
+      description: |
+        Anyone with the link can read it (unlisted). Entries of encrypted pastes
+        carry no title. Entries whose paste has expired are left out. Order:
+        `kind` ascending by code point, entries without a kind last; then
+        `updated_at` newest first, unknown times last; then `name` ascending.
+      x-phase: P2b
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: The workspace.
+          headers:
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceDocument'
+        '404': {$ref: '#/components/responses/NotFound'}
+        default: {$ref: '#/components/responses/Error'}
+    patch:
+      tags: [workspaces]
+      operationId: updateWorkspace
+      summary: Change the title
+      x-phase: P2b
+      security:
+        - ownerToken: []
+        - ownerCookie: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceUpdateRequest'
+      responses:
+        '200':
+          description: Updated.
+          headers:
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceDocument'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        default: {$ref: '#/components/responses/Error'}
+    delete:
+      tags: [workspaces]
+      operationId: deleteWorkspace
+      summary: Delete a workspace
+      description: Deletes the grouping only. Its pastes keep their own expiry and links.
+      x-phase: P2b
+      security:
+        - ownerToken: []
+        - ownerCookie: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '204':
+          description: Deleted.
+          headers:
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        default: {$ref: '#/components/responses/Error'}
+
+  /v1/workspaces/{slug}/entries:
+    parameters:
+      - $ref: '#/components/parameters/SlugPath'
+    post:
+      tags: [workspaces]
+      operationId: addWorkspaceEntry
+      summary: Add an existing paste under a name
+      description: |
+        The paste must belong to the same identity as the workspace: the server
+        compares the two uids, and holding both identities in one cookie is not
+        enough (403). A paste already in a workspace, a taken name and a full
+        workspace are 409. A missing or expired workspace or paste is 404.
+      x-phase: P2b
+      security:
+        - ownerToken: []
+        - ownerCookie: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceEntryAddRequest'
+            example:
+              entry: {name: plan.md, kind: plan, paste_id: abc123}
+      responses:
+        '201':
+          description: Added.
+          headers:
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+            Location: {$ref: '#/components/headers/PasteLocation'}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceEntryDocument'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/EntryAddConflict'}
+        default: {$ref: '#/components/responses/Error'}
+
+  /v1/workspaces/{slug}/entries/{name}:
+    parameters:
+      - $ref: '#/components/parameters/SlugPath'
+      - $ref: '#/components/parameters/EntryNamePath'
+    put:
+      tags: [workspaces]
+      operationId: putWorkspaceEntry
+      summary: Create or update a named entry
+      description: |
+        The body is the raw text. The caller must hold the workspace's identity.
+        The link of the paste never changes while the entry lives.
+
+        When the name does not exist, or its paste has expired, a new paste is
+        created in the workspace's identity and bound to the name (201). Its
+        expiry comes from `X-Paste-Expires` and its title from `X-Paste-Title`.
+        A create cannot encrypt or burn: `X-Paste-Password` on a create is 400
+        (create such a paste with `POST /v1/pastes` and add it). An `If-Match`
+        on a create matches no current version and is 412, so a stale write
+        never recreates an expired entry. A full workspace is 409
+        `workspace_full`.
+
+        When the entry exists, this is `PUT /v1/pastes/{id}/content` on its
+        paste, with the same rules, `If-Match` and `X-Paste-Password` included
+        (200). `X-Paste-Expires` and `X-Paste-Title` are 400 here. When
+        `X-Entry-Kind` is sent, the kind changes in the same transaction as the
+        content; when omitted, the kind stays. A 412 or any other failure leaves
+        both unchanged.
+      x-phase: P2b
+      security:
+        - ownerToken: []
+        - ownerCookie: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/PastePasswordHeader'
+        - name: X-Paste-Extension
+          in: header
+          required: false
+          description: Extension of a new entry's paste. Ignored when the entry exists, because an extension never changes after creation.
+          schema:
+            $ref: '#/components/schemas/Extension'
+        - name: X-Paste-Expires
+          in: header
+          required: false
+          description: Expiry of a new entry's paste in seconds, with the rules of `PasteCreate.expires_in`. Omitted takes the configured default.
+          schema:
+            type: integer
+            minimum: 0
+        - name: X-Paste-Title
+          in: header
+          required: false
+          description: Title of a new entry's paste, percent-encoded UTF-8; at most 256 characters once decoded.
+          schema:
+            type: string
+            minLength: 1
+        - name: X-Entry-Kind
+          in: header
+          required: false
+          description: Free-text category, for example `plan`, `result`, `review`, `log`.
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          text/plain; charset=utf-8:
+            schema:
+              type: string
+      responses:
+        '200':
+          description: The entry's paste was updated, or unchanged when the content already matched.
+          headers:
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+            ETag: {$ref: '#/components/headers/ETag'}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceEntryDocument'
+        '201':
+          description: A new paste was created and bound to this name.
+          headers:
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+            ETag: {$ref: '#/components/headers/ETag'}
+            Location: {$ref: '#/components/headers/PasteLocation'}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceEntryDocument'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/EntryWriteConflict'}
+        '412': {$ref: '#/components/responses/EntryPreconditionFailed'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Error'}
+    delete:
+      tags: [workspaces]
+      operationId: deleteWorkspaceEntry
+      summary: Remove an entry
+      description: Removes the entry from the workspace. The paste itself stays.
+      x-phase: P2b
+      security:
+        - ownerToken: []
+        - ownerCookie: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '204':
+          description: Removed.
+          headers:
+            X-Request-Id: {$ref: '#/components/headers/RequestId'}
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        default: {$ref: '#/components/responses/Error'}
+
+components:
+  securitySchemes:
+    ownerToken:
+      type: http
+      scheme: bearer
+      description: |
+        `Authorization: Bearer <owner_token>`. The token is the server's signature
+        over an identity's uid. Browsers never send it on their own, so Bearer
+        requests skip the `Origin` check. When present it is the only credential
+        considered; a token that fails verification is 401 with no fallback.
+    ownerCookie:
+      type: apiKey
+      in: cookie
+      name: uid
+      description: |
+        The web app's signed cookie, in upstream's format (several identities;
+        the first one creates), set `HttpOnly; Secure; SameSite=Lax; Path=/`.
+        Considered only when no `Authorization` header is sent. Because browsers
+        send it on their own, a write that carries it must send `Origin` equal to
+        the configured public URL (scheme, host and port); a missing, `null` or
+        foreign `Origin` is 403. That includes a `POST .../content` that carries
+        it, although that operation needs no credentials.
+
+  parameters:
+    RequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      description: |
+        Kept when it matches `[A-Za-z0-9-]{1,64}`; any other value is replaced by
+        one the server makes, never rejected. Echoed on every response.
+      schema:
+        type: string
+    PasteIdPath:
+      name: id
+      in: path
+      required: true
+      description: Paste id without extension.
+      schema:
+        $ref: '#/components/schemas/PasteId'
+    SlugPath:
+      name: slug
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Slug'
+    EntryNamePath:
+      name: name
+      in: path
+      required: true
+      description: |
+        Entry name, unique within the workspace, percent-encoded in the path.
+        The server normalises it to NFC before comparing or storing. Any Unicode
+        except `/` and control characters; not `.` or `..`; 1 to 128 bytes of
+        UTF-8 (the schema can only bound characters). These rules await the
+        owner (`docs/api/README.md`, "Pending owner rulings").
+      schema:
+        $ref: '#/components/schemas/EntryName'
+    IfMatch:
+      name: If-Match
+      in: header
+      required: false
+      description: |
+        RFC 9110 syntax: `*` or a comma-separated list of entity tags. The
+        comparison is strong: a weak tag (`W/"..."`) never matches. A list matches
+        when any strong tag equals the current `"<version_id>"`; `*` matches when
+        a current version exists. No match is 412. A value that does not parse is
+        400. Without the header the write overwrites whatever is current.
+      schema:
+        $ref: '#/components/schemas/IfMatchList'
+    PastePasswordHeader:
+      name: X-Paste-Password
+      in: header
+      required: false
+      description: |
+        Password of an encrypted paste, as base64url of its UTF-8 bytes. Required
+        when the paste is encrypted; never logged.
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9_-]+={0,2}$'
+
+  headers:
+    RequestId:
+      description: The request id the server used.
+      required: true
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9-]{1,64}$'
+    NoStore:
+      description: Always `no-store` on `/v1`.
+      required: true
+      schema:
+        type: string
+        enum: [no-store]
+    ETag:
+      description: The current version, `"<version_id>"`.
+      required: true
+      schema:
+        $ref: '#/components/schemas/EntityTag'
+    PasteLocation:
+      description: Path of the paste, `/v1/pastes/{id}`.
+      required: true
+      schema:
+        type: string
+        example: /v1/pastes/abc123
+    RetryAfter:
+      description: Seconds to wait before retrying.
+      required: true
+      schema:
+        type: integer
+        minimum: 0
+    BearerChallenge:
+      description: |
+        Challenge for the owner token, `Bearer realm="zpaste"`. When the 401 comes
+        from a missing or failed `X-Paste-Password` on an edit, the password
+        challenge (`PasswordChallenge`) instead.
+      required: true
+      schema:
+        type: string
+    PasswordChallenge:
+      description: |
+        Challenge for the paste password. `Paste-Password` is a custom
+        authentication scheme of this API, not registered with IANA; clients
+        recognise it to prompt for the password.
+      required: true
+      schema:
+        type: string
+        enum: ['Paste-Password realm="zpaste"']
+
+  responses:
+    Error:
+      description: Any other error, in the same shape (for example 405, 415, 500, 503).
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDocument'
+    BadRequest:
+      description: The request is malformed or a field is invalid (`bad_request`). Body parse errors are 400, not 422.
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDocument'
+          example:
+            error: {code: 400, type: bad_request, title: Bad Request, message: invalid marker, request_id: req-1}
+    Unauthorized:
+      description: |
+        No credentials, or credentials that fail verification (`unauthorized`).
+        On an edit of an encrypted paste, also a missing or wrong
+        `X-Paste-Password` (`wrong_password`); nothing is written.
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+        WWW-Authenticate: {$ref: '#/components/headers/BearerChallenge'}
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDocument'
+    WrongPassword:
+      description: The password is wrong (`wrong_password`).
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+        WWW-Authenticate: {$ref: '#/components/headers/PasswordChallenge'}
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDocument'
+          example:
+            error: {code: 401, type: wrong_password, title: Unauthorized, message: wrong password, request_id: req-1}
+    Forbidden:
+      description: |
+        Valid credentials that do not own the resource, two resources of
+        different identities, or a cookie request without a matching `Origin`
+        (`forbidden`).
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDocument'
+    NotFound:
+      description: Does not exist or has expired; the two are not told apart (`not_found`).
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDocument'
+    ReadPrecondition:
+      description: |
+        The read needs a password (`password_required`) or a burn confirmation
+        (`confirmation_required`). Nothing is returned or consumed.
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDocument'
+          example:
+            error: {code: 409, type: confirmation_required, title: Conflict, message: confirm to read; the paste is deleted after reading, request_id: req-1}
+    BurnNotEditable:
+      description: A burn-after-reading paste cannot be edited (`burn_not_editable`).
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDocument'
+    BurnNoHistory:
+      description: A burn-after-reading paste has no history endpoints (`burn_no_history`). Nothing is consumed.
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDocument'
+    VersionReadConflict:
+      description: |
+        The paste is burn-after-reading (`burn_no_history`), or the version is
+        encrypted and the body has no password (`password_required`). Nothing is
+        returned or consumed.
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDocument'
+    SlugTaken:
+      description: The slug is already taken (`slug_taken`).
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDocument'
+    EntryAddConflict:
+      description: |
+        The name is taken (`entry_name_taken`), the paste is already in a
+        workspace (`paste_in_workspace`), or the workspace is full
+        (`workspace_full`).
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDocument'
+    EntryWriteConflict:
+      description: |
+        The entry's paste is burn-after-reading (`burn_not_editable`), or a create
+        would exceed the workspace's entry limit (`workspace_full`).
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDocument'
+    PreconditionFailed:
+      description: '`If-Match` matches no current version (`version_conflict`). `ETag` carries the current version.'
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+        ETag: {$ref: '#/components/headers/ETag'}
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDocument'
+          example:
+            error: {code: 412, type: version_conflict, title: Precondition Failed, message: content changed since version 3, request_id: req-1}
+    EntryPreconditionFailed:
+      description: |
+        `If-Match` matches no current version (`version_conflict`). `ETag`
+        carries the current version when the entry has one; it is absent when the
+        name is new or its paste has expired.
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+        ETag:
+          description: The current version, `"<version_id>"`, when there is one.
+          required: false
+          schema:
+            $ref: '#/components/schemas/EntityTag'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDocument'
+    PayloadTooLarge:
+      description: |
+        The body exceeds `WASTEBIN_MAX_BODY_SIZE` bytes (`payload_too_large`).
+        History limits never cause it; they trim old versions instead.
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDocument'
+    TooManyRequests:
+      description: |
+        The shared limit on password derivation (concurrency, or rate per client
+        IP) is exceeded (`rate_limited`). Only requests that derive a key count.
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+        Retry-After: {$ref: '#/components/headers/RetryAfter'}
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDocument'
+
+  schemas:
+    PasteId:
+      type: string
+      description: 6 or 11 characters from upstream's alphabet, without extension.
+      pattern: '^([A-Za-z0-9+-]{6}|[A-Za-z0-9+-]{11})$'
+      example: abc123
+    VersionId:
+      type: string
+      description: Hash-chain id of a version (plan section 四), 64 lowercase hex digits.
+      pattern: '^[0-9a-f]{64}$'
+    EntityTag:
+      type: string
+      description: A strong entity tag, `"<version_id>"`.
+      pattern: '^"[0-9a-f]{64}"$'
+    IfMatchList:
+      type: string
+      description: '`*`, or entity tags (strong or `W/` weak) separated by commas.'
+      pattern: '^\s*(\*|(W/)?"[^"]*"(\s*,\s*(W/)?"[^"]*")*)\s*$'
+      example: '"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"'
+    Slug:
+      type: string
+      pattern: '^[a-z0-9-]{2,40}$'
+      example: v2raya
+    EntryName:
+      type: string
+      description: See the `name` path parameter. The byte limit (128 bytes of UTF-8) is enforced by the server.
+      minLength: 1
+      maxLength: 128
+      pattern: '^(?!\.\.?$)[^/\u0000-\u001F\u007F-\u009F]+$'
+      example: plan.md
+    Extension:
+      type: string
+      description: Upstream's rule, file names such as `CMakeLists.txt` included.
+      pattern: '^[A-Za-z0-9._-]{1,32}$'
+      example: md
+    Title:
+      type: [string, 'null']
+      maxLength: 256
+      description: At most 256 characters; null means no title.
+    WorkspaceTitle:
+      type: string
+      minLength: 1
+      maxLength: 200
+      description: 1 to 200 characters; pending owner ruling (`docs/api/README.md`).
+    Timestamp:
+      type: string
+      format: date-time
+      description: RFC 3339, UTC.
+      example: '2026-11-21T13:00:00Z'
+    ExpiresAt:
+      type: [string, 'null']
+      format: date-time
+      description: RFC 3339, UTC; null when the paste never expires.
+    Kind:
+      type: [string, 'null']
+      minLength: 1
+      description: Free-text category; null groups under "other".
+
+    Link:
+      type: object
+      required: [rel, href]
+      additionalProperties: false
+      properties:
+        rel:
+          type: string
+          enum: [self, bookmark, next]
+        href:
+          type: string
+          format: uri
+    PasteLinks:
+      type: array
+      description: '`self` is the API URL; `bookmark` is the reading page, `/<id>.<ext>` when the paste has an extension.'
+      items:
+        $ref: '#/components/schemas/Link'
+      example:
+        - {rel: self, href: 'https://paste.gentoozh.org/v1/pastes/abc123'}
+        - {rel: bookmark, href: 'https://paste.gentoozh.org/abc123.md'}
+
+    VersionDocument:
+      type: object
+      required: [version]
+      additionalProperties: false
+      properties:
+        version:
+          type: object
+          required: [id, status]
+          additionalProperties: false
+          properties:
+            id:
+              type: string
+              enum: [v1]
+            status:
+              type: string
+              enum: [CURRENT]
+
+    PasteCreate:
+      type: object
+      required: [content]
+      additionalProperties: false
+      properties:
+        content:
+          type: string
+          description: UTF-8; its size in bytes is at most `WASTEBIN_MAX_BODY_SIZE` (64 MiB in production).
+        extension:
+          $ref: '#/components/schemas/Extension'
+        title:
+          $ref: '#/components/schemas/Title'
+        expires_in:
+          type: [integer, 'null']
+          minimum: 0
+          description: |
+            Seconds. Must be one of the values in `WASTEBIN_PASTE_EXPIRATIONS`;
+            omitted or null takes the value marked default there (7 days in
+            production). 0 means never, and only where that list allows it.
+          example: 604800
+        burn_after_reading:
+          type: boolean
+          default: false
+        password:
+          type: [string, 'null']
+          minLength: 1
+          description: When set, the content is encrypted with it.
+    PasteCreateRequest:
+      type: object
+      required: [paste]
+      additionalProperties: false
+      properties:
+        paste:
+          $ref: '#/components/schemas/PasteCreate'
+
+    Paste:
+      description: |
+        Whitelisted metadata, one of two closed shapes told apart by `encrypted`.
+        Never carries the uid or an owner token; an encrypted paste has no
+        `title` field.
+      oneOf:
+        - $ref: '#/components/schemas/PlainPaste'
+        - $ref: '#/components/schemas/EncryptedPaste'
+    PlainPaste:
+      type: object
+      required: [id, extension, title, encrypted, burn_after_reading, expires_at, version, version_id, links]
+      additionalProperties: false
+      properties:
+        id: {$ref: '#/components/schemas/PasteId'}
+        extension:
+          type: [string, 'null']
+          description: Stored at creation; null for pastes from before the column.
+        title: {$ref: '#/components/schemas/Title'}
+        encrypted:
+          type: boolean
+          enum: [false]
+        burn_after_reading: {type: boolean}
+        expires_at: {$ref: '#/components/schemas/ExpiresAt'}
+        version:
+          type: integer
+          minimum: 1
+          description: Depth in the version chain, for ordering and display only.
+        version_id: {$ref: '#/components/schemas/VersionId'}
+        links: {$ref: '#/components/schemas/PasteLinks'}
+    EncryptedPaste:
+      type: object
+      required: [id, extension, encrypted, burn_after_reading, expires_at, version, version_id, links]
+      additionalProperties: false
+      properties:
+        id: {$ref: '#/components/schemas/PasteId'}
+        extension:
+          type: [string, 'null']
+          description: Stored at creation; null for pastes from before the column.
+        encrypted:
+          type: boolean
+          enum: [true]
+        burn_after_reading: {type: boolean}
+        expires_at: {$ref: '#/components/schemas/ExpiresAt'}
+        version:
+          type: integer
+          minimum: 1
+          description: Depth in the version chain, for ordering and display only.
+        version_id: {$ref: '#/components/schemas/VersionId'}
+        links: {$ref: '#/components/schemas/PasteLinks'}
+
+    PasteCreated:
+      description: |
+        A paste as returned by create: the `Paste` fields plus `owner_token`,
+        which is present only when a non-browser create minted a new identity.
+        It is shown once and never logged.
+      oneOf:
+        - $ref: '#/components/schemas/PlainPasteCreated'
+        - $ref: '#/components/schemas/EncryptedPasteCreated'
+    OwnerToken:
+      type: string
+      minLength: 1
+      description: Signed uid of the new identity. Shown once; never logged.
+    PlainPasteCreated:
+      type: object
+      required: [id, extension, title, encrypted, burn_after_reading, expires_at, version, version_id, links]
+      additionalProperties: false
+      properties:
+        id: {$ref: '#/components/schemas/PasteId'}
+        extension: {type: [string, 'null']}
+        title: {$ref: '#/components/schemas/Title'}
+        encrypted:
+          type: boolean
+          enum: [false]
+        burn_after_reading: {type: boolean}
+        expires_at: {$ref: '#/components/schemas/ExpiresAt'}
+        version: {type: integer, minimum: 1}
+        version_id: {$ref: '#/components/schemas/VersionId'}
+        owner_token: {$ref: '#/components/schemas/OwnerToken'}
+        links: {$ref: '#/components/schemas/PasteLinks'}
+    EncryptedPasteCreated:
+      type: object
+      required: [id, extension, encrypted, burn_after_reading, expires_at, version, version_id, links]
+      additionalProperties: false
+      properties:
+        id: {$ref: '#/components/schemas/PasteId'}
+        extension: {type: [string, 'null']}
+        encrypted:
+          type: boolean
+          enum: [true]
+        burn_after_reading: {type: boolean}
+        expires_at: {$ref: '#/components/schemas/ExpiresAt'}
+        version: {type: integer, minimum: 1}
+        version_id: {$ref: '#/components/schemas/VersionId'}
+        owner_token: {$ref: '#/components/schemas/OwnerToken'}
+        links: {$ref: '#/components/schemas/PasteLinks'}
+    PasteDocument:
+      type: object
+      required: [paste]
+      additionalProperties: false
+      properties:
+        paste:
+          $ref: '#/components/schemas/Paste'
+    PasteCreatedDocument:
+      type: object
+      required: [paste]
+      additionalProperties: false
+      properties:
+        paste:
+          $ref: '#/components/schemas/PasteCreated'
+      example:
+        paste:
+          id: abc123
+          extension: md
+          title: Plan
+          encrypted: false
+          burn_after_reading: false
+          expires_at: '2026-11-21T13:00:00Z'
+          version: 1
+          version_id: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+          owner_token: example-owner-token
+          links:
+            - {rel: self, href: 'https://paste.gentoozh.org/v1/pastes/abc123'}
+            - {rel: bookmark, href: 'https://paste.gentoozh.org/abc123.md'}
+    PasteListDocument:
+      type: object
+      required: [pastes, pastes_links]
+      additionalProperties: false
+      properties:
+        pastes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Paste'
+        pastes_links:
+          type: array
+          description: Holds one `next` link while more pages exist; empty on the last page.
+          maxItems: 1
+          items:
+            $ref: '#/components/schemas/Link'
+          example:
+            - {rel: next, href: 'https://paste.gentoozh.org/v1/pastes?owner=me&limit=20&marker=abc123'}
+    PasteUpdate:
+      type: object
+      required: [title]
+      additionalProperties: false
+      properties:
+        title:
+          $ref: '#/components/schemas/Title'
+    PasteUpdateRequest:
+      type: object
+      required: [paste]
+      additionalProperties: false
+      properties:
+        paste:
+          $ref: '#/components/schemas/PasteUpdate'
+
+    ContentReadRequest:
+      type: object
+      additionalProperties: false
+      description: |
+        `password` for an encrypted paste, `confirm_burn: true` for a
+        burn-after-reading paste, both in one request to consume an encrypted burn
+        paste. See `readContent` for every combination.
+      properties:
+        password:
+          type: string
+          minLength: 1
+        confirm_burn:
+          type: boolean
+          enum: [true]
+    VersionReadRequest:
+      type: object
+      additionalProperties: false
+      description: '`{}` for a plain paste, `{"password": ...}` for an encrypted one. History never consumes, so there is no `confirm_burn`.'
+      properties:
+        password:
+          type: string
+          minLength: 1
+    ContentDocument:
+      type: object
+      required: [content]
+      additionalProperties: false
+      properties:
+        content:
+          type: object
+          required: [text, version_id]
+          additionalProperties: false
+          properties:
+            text:
+              type: string
+            version_id:
+              $ref: '#/components/schemas/VersionId'
+
+    Version:
+      description: One stored version, one of two closed shapes told apart by `encrypted`. An encrypted paste's versions have no `title` field.
+      oneOf:
+        - $ref: '#/components/schemas/PlainVersion'
+        - $ref: '#/components/schemas/EncryptedVersion'
+    PlainVersion:
+      type: object
+      required: [version, version_id, parent_id, created_at, encrypted, title]
+      additionalProperties: false
+      properties:
+        version: {type: integer, minimum: 1}
+        version_id: {$ref: '#/components/schemas/VersionId'}
+        parent_id:
+          description: Null for the first version.
+          oneOf:
+            - $ref: '#/components/schemas/VersionId'
+            - type: 'null'
+        created_at:
+          type: [string, 'null']
+          format: date-time
+          description: RFC 3339, UTC; null for the first version backfilled by the migration.
+        encrypted:
+          type: boolean
+          enum: [false]
+        title: {$ref: '#/components/schemas/Title'}
+    EncryptedVersion:
+      type: object
+      required: [version, version_id, parent_id, created_at, encrypted]
+      additionalProperties: false
+      properties:
+        version: {type: integer, minimum: 1}
+        version_id: {$ref: '#/components/schemas/VersionId'}
+        parent_id:
+          description: Null for the first version.
+          oneOf:
+            - $ref: '#/components/schemas/VersionId'
+            - type: 'null'
+        created_at:
+          type: [string, 'null']
+          format: date-time
+          description: RFC 3339, UTC; null for the first version backfilled by the migration.
+        encrypted:
+          type: boolean
+          enum: [true]
+    VersionListDocument:
+      type: object
+      required: [versions]
+      additionalProperties: false
+      properties:
+        versions:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/Version'
+
+    WorkspaceCreate:
+      type: object
+      required: [slug]
+      additionalProperties: false
+      properties:
+        slug:
+          $ref: '#/components/schemas/Slug'
+        title:
+          $ref: '#/components/schemas/WorkspaceTitle'
+    WorkspaceCreateRequest:
+      type: object
+      required: [workspace]
+      additionalProperties: false
+      properties:
+        workspace:
+          $ref: '#/components/schemas/WorkspaceCreate'
+    WorkspaceUpdateRequest:
+      type: object
+      required: [workspace]
+      additionalProperties: false
+      properties:
+        workspace:
+          type: object
+          required: [title]
+          additionalProperties: false
+          properties:
+            title:
+              $ref: '#/components/schemas/WorkspaceTitle'
+    WorkspaceEntryAdd:
+      type: object
+      required: [name, paste_id]
+      additionalProperties: false
+      properties:
+        name: {$ref: '#/components/schemas/EntryName'}
+        kind: {$ref: '#/components/schemas/Kind'}
+        paste_id: {$ref: '#/components/schemas/PasteId'}
+    WorkspaceEntryAddRequest:
+      type: object
+      required: [entry]
+      additionalProperties: false
+      properties:
+        entry:
+          $ref: '#/components/schemas/WorkspaceEntryAdd'
+    WorkspaceEntry:
+      description: One entry, one of two closed shapes told apart by `encrypted`. An entry whose paste is encrypted has no `title` field.
+      oneOf:
+        - $ref: '#/components/schemas/PlainWorkspaceEntry'
+        - $ref: '#/components/schemas/EncryptedWorkspaceEntry'
+    PlainWorkspaceEntry:
+      type: object
+      required: [name, kind, paste_id, encrypted, title, version, updated_at, links]
+      additionalProperties: false
+      properties:
+        name: {$ref: '#/components/schemas/EntryName'}
+        kind: {$ref: '#/components/schemas/Kind'}
+        paste_id: {$ref: '#/components/schemas/PasteId'}
+        encrypted:
+          type: boolean
+          enum: [false]
+        title: {$ref: '#/components/schemas/Title'}
+        version: {type: integer, minimum: 1}
+        updated_at:
+          type: [string, 'null']
+          format: date-time
+          description: Time of the paste's current version, RFC 3339, UTC; null when unknown (backfilled first version).
+        links: {$ref: '#/components/schemas/PasteLinks'}
+    EncryptedWorkspaceEntry:
+      type: object
+      required: [name, kind, paste_id, encrypted, version, updated_at, links]
+      additionalProperties: false
+      properties:
+        name: {$ref: '#/components/schemas/EntryName'}
+        kind: {$ref: '#/components/schemas/Kind'}
+        paste_id: {$ref: '#/components/schemas/PasteId'}
+        encrypted:
+          type: boolean
+          enum: [true]
+        version: {type: integer, minimum: 1}
+        updated_at:
+          type: [string, 'null']
+          format: date-time
+          description: Time of the paste's current version, RFC 3339, UTC; null when unknown (backfilled first version).
+        links: {$ref: '#/components/schemas/PasteLinks'}
+    WorkspaceEntryDocument:
+      type: object
+      required: [entry]
+      additionalProperties: false
+      properties:
+        entry:
+          $ref: '#/components/schemas/WorkspaceEntry'
+    Workspace:
+      type: object
+      required: [slug, title, created_at, updated_at, entries, links]
+      additionalProperties: false
+      properties:
+        slug:
+          $ref: '#/components/schemas/Slug'
+        title:
+          $ref: '#/components/schemas/WorkspaceTitle'
+        created_at:
+          $ref: '#/components/schemas/Timestamp'
+        updated_at:
+          $ref: '#/components/schemas/Timestamp'
+        entries:
+          type: array
+          maxItems: 500
+          description: At most 500 entries (pending owner ruling); order as in `showWorkspace`.
+          items:
+            $ref: '#/components/schemas/WorkspaceEntry'
+        links:
+          type: array
+          description: '`self` is the API URL; `bookmark` is `/w/<slug>`.'
+          items:
+            $ref: '#/components/schemas/Link'
+    WorkspaceDocument:
+      type: object
+      required: [workspace]
+      additionalProperties: false
+      properties:
+        workspace:
+          $ref: '#/components/schemas/Workspace'
+
+    Error:
+      type: object
+      required: [code, type, title, message, request_id]
+      additionalProperties: false
+      properties:
+        code:
+          type: integer
+          description: The HTTP status code.
+        type:
+          type: string
+          description: |
+            Machine-readable kind. The plan names `version_conflict`,
+            `password_required` and `confirmation_required`; the rest are this
+            contract's. `docs/api/README.md` maps each operation and status to
+            its types.
+          enum:
+            - bad_request
+            - unauthorized
+            - wrong_password
+            - forbidden
+            - not_found
+            - password_required
+            - confirmation_required
+            - burn_not_editable
+            - burn_no_history
+            - version_conflict
+            - slug_taken
+            - entry_name_taken
+            - paste_in_workspace
+            - workspace_full
+            - payload_too_large
+            - rate_limited
+            - method_not_allowed
+            - unsupported_media_type
+            - internal_error
+            - service_unavailable
+        title:
+          type: string
+          description: The HTTP reason phrase.
+        message:
+          type: string
+          description: Human-readable detail. Carries no internal or upstream detail.
+        request_id:
+          type: string
+          description: Same value as the `X-Request-Id` response header.
+    ErrorDocument:
+      type: object
+      required: [error]
+      additionalProperties: false
+      properties:
+        error:
+          $ref: '#/components/schemas/Error'
