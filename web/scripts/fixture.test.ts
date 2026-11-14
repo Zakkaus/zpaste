@@ -55,7 +55,7 @@ describe('withEmbeddedPaste', () => {
     const html = withEmbeddedPaste('<body><div id="root"></div></body>', data);
     expect(html.indexOf('zpaste-paste')).toBeLessThan(html.indexOf('id="root"'));
     document.documentElement.innerHTML = html;
-    expect(readEmbeddedPaste(document)).toEqual(data);
+    expect(readEmbeddedPaste(document)).toEqual({state: 'found', data});
   });
 });
 

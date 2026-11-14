@@ -24,6 +24,15 @@ export const en = {
   'outline.drawerNav': 'Sections',
   'theme.toDark': 'Switch to dark mode',
   'theme.toLight': 'Switch to light mode',
+  'large.title': 'Large paste',
+  'large.plain': 'This paste has more than {limit} characters, so it is shown as plain text, without formatting or an outline.',
+  'large.truncated': 'This paste has more than {limit} characters, so only its start is shown, as plain text. Raw and Download have all of it.',
+  'error.title': 'This paste could not be shown',
+  'error.missing': 'The page arrived without a readable copy of the paste.',
+  'error.render': 'Something went wrong while drawing the paste.',
+  'error.nextRaw': 'Reload the page, or open the raw text.',
+  'error.nextReload': 'Reload the page to try again.',
+  'error.openRaw': 'Open raw text',
 } as const;
 
 export type MessageKey = keyof typeof en;

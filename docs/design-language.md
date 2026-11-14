@@ -280,6 +280,8 @@ Each state has its own screen; none is a skeleton that never resolves.
 | Network error | Says the request failed and what to do next. A failed burn read uses the burn-failed screen instead. |
 | Empty workspace (P2b) | Says the workspace holds no pastes yet. |
 | Edit conflict (P2) | A 412 on save says the paste changed since it was loaded. What the page offers next is open. |
+| Large paste | Past a render limit (`web/src/reader/renderPlan.ts`), the paste shows as plain text under an info banner that says why, with no outline; past the second limit only its start shows, and the banner points to Raw and Download. |
+| Broken page | The page's embedded paste is missing or cannot be read, or drawing it fails: the reading page's frame with a title, what happened, and a button to the raw text when the URL names the paste. |
 
 Copy for every state is in the locale catalogues; the error screens say what
 happened and what to do next, per [web/AGENTS.md](../web/AGENTS.md).

@@ -36,13 +36,21 @@ describe('serializeEmbeddedPaste', () => {
   it('round-trips through the page', () => {
     const data = paste('# Title\n\nbody');
     document.body.innerHTML = embeddedPasteElement(data);
-    expect(readEmbeddedPaste(document)).toEqual(data);
+    expect(readEmbeddedPaste(document)).toEqual({state: 'found', data});
     expect(document.getElementById(EMBEDDED_PASTE_ID)?.getAttribute('type')).toBe('application/json');
   });
 
   it('reads nothing from a page without a paste', () => {
     document.body.innerHTML = '';
-    expect(readEmbeddedPaste(document)).toBeNull();
+    expect(readEmbeddedPaste(document)).toEqual({state: 'missing'});
+  });
+
+  it('tells a cut-off or foreign element from a missing one', () => {
+    const element = embeddedPasteElement(paste('# Title'));
+    document.body.innerHTML = `${element.slice(0, element.indexOf('"content"'))}</script>`;
+    expect(readEmbeddedPaste(document)).toEqual({state: 'malformed'});
+    document.body.innerHTML = `<script type="application/json" id="${EMBEDDED_PASTE_ID}">{"content": 1}</script>`;
+    expect(readEmbeddedPaste(document)).toEqual({state: 'malformed'});
   });
 
   it('writes plain JSON for ordinary text', () => {

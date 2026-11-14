@@ -54,8 +54,27 @@ export function embeddedPasteElement(data: EmbeddedPaste): string {
   return `<script type="application/json" id="${EMBEDDED_PASTE_ID}">${serializeEmbeddedPaste(data)}</script>`;
 }
 
-/** The embedded paste, or null when the page carries none. */
-export function readEmbeddedPaste(doc: Document): EmbeddedPaste | null {
+/**
+ * What the page carries: the paste, nothing (`missing`), or an element that is not the paste's JSON
+ * (`malformed`), such as a shell cut off mid-element or written with other escaping.
+ */
+export type EmbeddedRead = {state: 'found'; data: EmbeddedPaste} | {state: 'missing'} | {state: 'malformed'};
+
+export function readEmbeddedPaste(doc: Document): EmbeddedRead {
   const text = doc.getElementById(EMBEDDED_PASTE_ID)?.textContent;
-  return text == null || text === '' ? null : (JSON.parse(text) as EmbeddedPaste);
+  if (text == null || text === '') return {state: 'missing'};
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return {state: 'malformed'};
+  }
+  return isEmbeddedPaste(data) ? {state: 'found', data} : {state: 'malformed'};
+}
+
+/** The fields the reading page cannot do without. */
+function isEmbeddedPaste(value: unknown): value is EmbeddedPaste {
+  if (typeof value !== 'object' || value == null) return false;
+  const {paste, content} = value as Partial<EmbeddedPaste>;
+  return typeof content === 'string' && typeof paste === 'object' && paste != null && typeof paste.id === 'string';
 }

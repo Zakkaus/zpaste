@@ -258,6 +258,15 @@ everything the app renders relies on the libraries: Astryx `Markdown` turns
 Markdown into React elements and never renders raw HTML, mermaid runs with
 `securityLevel: 'strict'`, and mind map nodes are React text.
 
+A paste too large to draw in one short task is shown as plain text under a
+notice, with no outline (`web/src/reader/renderPlan.ts`): Markdown past
+100,000 characters, and past 1,000,000 characters only the start, with Raw
+and Download for the whole paste. The shell still embeds the whole content;
+whether it stops embedding past a size and the app fetches the raw text
+instead is decided with P1 slice 4. A page whose embedded paste is missing or
+cannot be parsed, or whose rendering throws, shows an error screen with a
+link to `/raw/<id>` instead of a blank page.
+
 ## API layer
 
 Target, P1 for reading and create, P2 for edits and versions, P2b for
