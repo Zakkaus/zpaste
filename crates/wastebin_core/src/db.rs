@@ -7,10 +7,14 @@ use rusqlite::{Connection, Transaction, params, params_from_iter};
 use rusqlite_migration::{HookError, M, Migrations};
 use tokio::sync::oneshot;
 
-use crate::crypto::{self, Password};
+use crate::crypto::{self, KdfLimit, Password};
 use crate::expiration::Expiration;
 use crate::id::Id;
+use crate::revision;
+pub use head::{Head, ListPage, Stored};
 use read::{DatabaseEntry, ListEntry, Metadata};
+
+mod head;
 
 /// Database related errors.
 #[derive(thiserror::Error, Debug)]
@@ -27,6 +31,8 @@ pub enum Error {
     NoPassword,
     #[error("entry not found")]
     NotFound,
+    #[error("marker is not an unexpired paste of the caller")]
+    InvalidMarker,
     #[error("join error: {0}")]
     Join(#[from] tokio::task::JoinError),
     #[error("crypto error: {0}")]
@@ -47,6 +53,8 @@ pub enum Error {
 pub struct Database {
     /// Sender for database commands.
     sender: kanal::AsyncSender<Command>,
+    /// Admission control shared by every key derivation this database runs.
+    kdf: KdfLimit,
 }
 
 /// Actual database handler that owns the connection to the underlying sqlite database.
@@ -55,6 +63,9 @@ struct Handler {
     /// Receiver for database commands.
     receiver: kanal::Receiver<Command>,
 }
+
+/// A [`Head`] and, when asked for, the stored bytes of its version.
+type HeadResult = Result<(Head, Option<Stored>), Error>;
 
 /// Commands issued to the database handler and corresponding to [`Database`] calls.
 enum Command {
@@ -92,6 +103,25 @@ enum Command {
     Purge {
         result: oneshot::Sender<Result<Vec<Id>, Error>>,
     },
+    Create {
+        entry: write::DatabaseEntry,
+        result: oneshot::Sender<Result<Head, Error>>,
+    },
+    Head {
+        id: Id,
+        with_data: bool,
+        result: oneshot::Sender<HeadResult>,
+    },
+    Consume {
+        id: Id,
+        result: oneshot::Sender<Result<(Head, Stored), Error>>,
+    },
+    ListFor {
+        uids: Vec<i64>,
+        marker: Option<Id>,
+        limit: usize,
+        result: oneshot::Sender<Result<ListPage, Error>>,
+    },
 }
 
 /// Database opening modes
@@ -105,7 +135,7 @@ pub enum Open {
 
 /// Module with types for insertion.
 pub mod write {
-    use crate::crypto::{Encrypted, Password, Plaintext};
+    use crate::crypto::{Encrypted, KdfLimit, Password, Plaintext};
     use crate::db::Error;
     use async_compression::tokio::bufread::ZstdEncoder;
     use chacha20poly1305::XNonce;
@@ -167,12 +197,13 @@ pub mod write {
     }
 
     impl CompressedEntry {
-        /// Encrypt if password is set.
-        pub async fn encrypt(self) -> Result<DatabaseEntry, Error> {
+        /// Encrypt if password is set, with a slot of `kdf` for the key derivation.
+        pub async fn encrypt(self, kdf: &KdfLimit) -> Result<DatabaseEntry, Error> {
             let (data, nonce) = if let Some(password) = &self.entry.password {
+                let permit = kdf.acquire().await?;
                 let password = Password::from(password.as_bytes().to_vec());
                 let plaintext = Plaintext::from(self.data);
-                let Encrypted { ciphertext, nonce } = plaintext.encrypt(password).await?;
+                let Encrypted { ciphertext, nonce } = plaintext.encrypt(password, permit).await?;
                 (ciphertext, Some(nonce))
             } else {
                 (self.data, None)
@@ -189,7 +220,7 @@ pub mod write {
 
 /// Module with types for reading from the database.
 pub mod read {
-    use crate::crypto::{Encrypted, Password};
+    use crate::crypto::{Encrypted, KdfLimit, Password};
     use crate::db::Error;
     use crate::expiration::Expiration;
     use crate::id::Id;
@@ -255,6 +286,8 @@ pub mod read {
         pub expiration: Option<Expiration>,
         /// Entry will be deleted the next time it is fetched via [`Database::get`].
         pub must_be_deleted: bool,
+        /// Whether the content is encrypted, so reading it derives a key.
+        pub encrypted: bool,
     }
 
     /// Potentially deleted or non-existent expired entry.
@@ -284,9 +317,12 @@ pub mod read {
     }
 
     impl DatabaseEntry {
+        /// Decrypt with `password` when the entry is encrypted, with a slot of `kdf` for the key
+        /// derivation. A plain entry derives nothing and takes no slot.
         pub async fn decrypt(
             self,
             password: Option<Password>,
+            kdf: &KdfLimit,
         ) -> Result<CompressedReadEntry, Error> {
             match (self.nonce, password) {
                 (Some(_), None) => Err(Error::NoPassword),
@@ -296,8 +332,9 @@ pub mod read {
                     must_be_deleted: self.must_be_deleted,
                 }),
                 (Some(nonce), Some(password)) => {
+                    let permit = kdf.acquire().await?;
                     let encrypted = Encrypted::new(self.data, nonce);
-                    let decrypted = encrypted.decrypt(password).await?;
+                    let decrypted = encrypted.decrypt(password, permit).await?;
                     Ok(CompressedReadEntry {
                         data: decrypted,
                         metadata: self.metadata,
@@ -310,20 +347,25 @@ pub mod read {
 
     impl CompressedReadEntry {
         pub async fn decompress(self) -> Result<UncompressedEntry, Error> {
-            let mut decoder = ZstdDecoder::new(Cursor::new(self.data));
-            let mut text = String::new();
-
-            decoder
-                .read_to_string(&mut text)
-                .await
-                .map_err(|e| Error::Compression(e.to_string()))?;
-
             Ok(UncompressedEntry {
-                text,
+                text: decompress(self.data).await?,
                 metadata: self.metadata,
                 must_be_deleted: self.must_be_deleted,
             })
         }
+    }
+
+    /// Decompress the stored bytes of a plain (unencrypted) paste into its text.
+    pub async fn decompress(data: Vec<u8>) -> Result<String, Error> {
+        let mut decoder = ZstdDecoder::new(Cursor::new(data));
+        let mut text = String::new();
+
+        decoder
+            .read_to_string(&mut text)
+            .await
+            .map_err(|e| Error::Compression(e.to_string()))?;
+
+        Ok(text)
     }
 }
 
@@ -341,11 +383,19 @@ impl Handler {
     fn new(method: Open, receiver: kanal::Receiver<Command>) -> Result<Self, Error> {
         tracing::debug!("opening {method:?}");
 
-        let mut conn = match method {
+        let conn = match method {
             Open::Memory => Connection::open_in_memory()?,
             Open::Path(path) => Connection::open(path)?,
         };
 
+        Self::with_connection(conn, receiver)
+    }
+
+    /// Migrate `conn` to the latest schema and use it.
+    fn with_connection(
+        mut conn: Connection,
+        receiver: kanal::Receiver<Command>,
+    ) -> Result<Self, Error> {
         let migrations = Migrations::new(vec![
             M::up(include_str!("migrations/0001-initial.sql")),
             M::up(include_str!("migrations/0002-add-created-column.sql")),
@@ -381,6 +431,14 @@ impl Handler {
             M::up(include_str!("migrations/0005-drop-text-column.sql")),
             M::up(include_str!("migrations/0006-add-nonce-column.sql")),
             M::up(include_str!("migrations/0007-add-title-column.sql")),
+            M::up_with_hook(
+                include_str!("migrations/0008-add-revisions.sql"),
+                |tx: &Transaction| {
+                    let rows = revision::backfill(tx)?;
+                    tracing::debug!("backfilled the first revision of {rows} rows");
+                    Ok(())
+                },
+            ),
         ]);
 
         migrations.to_latest(&mut conn)?;
@@ -424,6 +482,27 @@ impl Handler {
                 Command::Purge { result } => result
                     .send(self.purge())
                     .map_err(|_| Error::ResultSendError),
+                Command::Create { entry, result } => result
+                    .send(self.create(entry))
+                    .map_err(|_| Error::ResultSendError),
+                Command::Head {
+                    id,
+                    with_data,
+                    result,
+                } => result
+                    .send(self.head(id, with_data))
+                    .map_err(|_| Error::ResultSendError),
+                Command::Consume { id, result } => result
+                    .send(self.consume(id))
+                    .map_err(|_| Error::ResultSendError),
+                Command::ListFor {
+                    uids,
+                    marker,
+                    limit,
+                    result,
+                } => result
+                    .send(self.list_for(&uids, marker, limit))
+                    .map_err(|_| Error::ResultSendError),
             };
 
             if let Err(err) = result {
@@ -432,24 +511,26 @@ impl Handler {
         }
     }
 
+    /// Insert the entry and its first revision in one transaction.
     fn insert(
-        &self,
+        &mut self,
         write::DatabaseEntry { entry, data, nonce }: write::DatabaseEntry,
     ) -> Result<(Id, write::Entry), Error> {
         let mut counter = 0;
         let title = entry.title.clone();
         let nonce = nonce.as_ref().map(|n| n.as_slice());
+        let tx = self.conn.transaction()?;
 
         loop {
             let id = Id::rand();
 
             let result = match entry.expires {
-                None => self.conn.execute(
-                    "INSERT INTO entries (id, uid, data, burn_after_reading, nonce, title) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    params![id.to_i64(), entry.uid, data, entry.burn_after_reading, nonce, title],
+                None => tx.execute(
+                    "INSERT INTO entries (id, uid, data, burn_after_reading, nonce, title, extension, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))",
+                    params![id.to_i64(), entry.uid, data, entry.burn_after_reading, nonce, title, entry.extension],
                 ),
-                Some(expires) => self.conn.execute(
-                    "INSERT INTO entries (id, uid, data, burn_after_reading, nonce, expires, title) VALUES (?1, ?2, ?3, ?4, ?5, datetime('now', ?6), ?7)",
+                Some(expires) => tx.execute(
+                    "INSERT INTO entries (id, uid, data, burn_after_reading, nonce, expires, title, extension, created_at) VALUES (?1, ?2, ?3, ?4, ?5, datetime('now', ?6), ?7, ?8, datetime('now'))",
                     params![
                         id.to_i64(),
                         entry.uid,
@@ -458,6 +539,7 @@ impl Handler {
                         nonce,
                         format!("{expires} seconds"),
                         title,
+                        entry.extension,
                     ],
                 ),
             };
@@ -480,6 +562,8 @@ impl Handler {
                 Err(err) => break Err(err)?,
                 Ok(rows) => {
                     debug_assert!(rows == 1);
+                    revision::insert_first(&tx, id.to_i64(), &data, title.as_deref())?;
+                    tx.commit()?;
                     return Ok((id, entry));
                 }
             }
@@ -488,7 +572,7 @@ impl Handler {
 
     fn get_metadata(&self, id: Id) -> Result<Metadata, Error> {
         let metadata = self.conn.query_row(
-            "SELECT uid, title, CAST(ROUND((julianday(expires) - julianday('now')) * 86400) AS INTEGER), burn_after_reading FROM entries WHERE id=?1",
+            "SELECT uid, title, CAST(ROUND((julianday(expires) - julianday('now')) * 86400) AS INTEGER), burn_after_reading, nonce IS NOT NULL FROM entries WHERE id=?1",
             params![id.to_i64()],
             |row| {
                 let expiration = row.get::<_, Option<i64>>(2)?
@@ -501,6 +585,7 @@ impl Handler {
                     title: row.get::<_, Option<String>>(1)?,
                     expiration,
                     must_be_deleted: row.get::<_, Option<bool>>(3)?.unwrap_or(false),
+                    encrypted: row.get(4)?,
                 })
             }
         )?;
@@ -627,13 +712,25 @@ impl Database {
         let sender = sender.to_async();
         let handler = Handler::new(method, receiver)?;
         let fut = async move { tokio::task::spawn_blocking(|| handler.run()).await? };
-        Ok((Self { sender }, fut))
+        Ok((
+            Self {
+                sender,
+                kdf: KdfLimit::default(),
+            },
+            fut,
+        ))
+    }
+
+    /// Use `kdf` instead of [`KdfLimit::default`] for every key derivation of this database.
+    #[must_use]
+    pub fn with_kdf_limit(self, kdf: KdfLimit) -> Self {
+        Self { kdf, ..self }
     }
 
     /// Insert `entry` under a new random id into the database and optionally set owner to `uid`.
     /// Returns the id of the new entry on success.
     pub async fn insert(&self, entry: write::Entry) -> Result<(Id, write::Entry), Error> {
-        let entry = entry.compress().await?.encrypt().await?;
+        let entry = entry.compress().await?.encrypt(&self.kdf).await?;
 
         let (result, command_result) = oneshot::channel();
         self.sender
@@ -641,6 +738,105 @@ impl Database {
             .await
             .map_err(|_| Error::SendError)?;
 
+        command_result.await?
+    }
+
+    /// Insert `entry` like [`Database::insert`] and return the [`Head`] of the new paste.
+    pub async fn create(&self, entry: write::Entry) -> Result<Head, Error> {
+        let entry = entry.compress().await?.encrypt(&self.kdf).await?;
+
+        let (result, command_result) = oneshot::channel();
+        self.sender
+            .send(Command::Create { entry, result })
+            .await
+            .map_err(|_| Error::SendError)?;
+
+        command_result.await?
+    }
+
+    /// Get the [`Head`] of `id` without reading content. Never deletes or consumes the paste.
+    pub async fn head(&self, id: Id) -> Result<Head, Error> {
+        Ok(self.head_command(id, false).await?.0)
+    }
+
+    /// Get the [`Head`] of `id` and the stored bytes of its head version (compressed, and
+    /// ciphertext when encrypted). Never deletes or consumes the paste.
+    pub async fn head_with_data(&self, id: Id) -> Result<(Head, Vec<u8>), Error> {
+        let (head, stored) = self.head_with_stored(id).await?;
+        Ok((head, stored.data))
+    }
+
+    /// Get the [`Head`] of `id` and the stored bytes and nonce of its head version. Never deletes
+    /// or consumes the paste.
+    pub async fn head_with_stored(&self, id: Id) -> Result<(Head, Stored), Error> {
+        let (head, stored) = self.head_command(id, true).await?;
+        Ok((head, stored.ok_or(Error::NotFound)?))
+    }
+
+    /// Delete `id` and return its [`Head`] and stored bytes, atomically: of concurrent consumers
+    /// of one paste exactly one gets it, the others [`Error::NotFound`]. An expired paste is
+    /// [`Error::NotFound`] and stays for the purge.
+    pub async fn consume(&self, id: Id) -> Result<(Head, Stored), Error> {
+        let (result, command_result) = oneshot::channel();
+        self.sender
+            .send(Command::Consume { id, result })
+            .await
+            .map_err(|_| Error::SendError)?;
+        command_result.await?
+    }
+
+    /// The text of `stored`: decrypted with `password` when it is encrypted, with a slot of this
+    /// database's [`KdfLimit`] for the key derivation, then decompressed. Reads and deletes
+    /// nothing, so verifying a password never consumes a paste. A plain version derives nothing
+    /// and ignores `password`.
+    pub async fn open(&self, stored: Stored, password: Option<Password>) -> Result<String, Error> {
+        let data = match (stored.nonce, password) {
+            (None, _) => stored.data,
+            (Some(_), None) => return Err(Error::NoPassword),
+            (Some(nonce), Some(password)) => {
+                let permit = self.kdf.acquire().await?;
+                crypto::Encrypted::new(stored.data, nonce)
+                    .decrypt(password, permit)
+                    .await?
+            }
+        };
+
+        read::decompress(data).await
+    }
+
+    /// One page of the unexpired pastes owned by any of `uids`; see [`ListPage`]. Order is newest
+    /// first by `(created_at, id)`, pastes from before the `created_at` column last. `marker`, the
+    /// last id of the previous page, must be an unexpired paste of `uids`, or the call is
+    /// [`Error::InvalidMarker`], whatever the reason.
+    pub async fn list_for(
+        &self,
+        uids: &[i64],
+        marker: Option<Id>,
+        limit: usize,
+    ) -> Result<ListPage, Error> {
+        let (result, command_result) = oneshot::channel();
+        self.sender
+            .send(Command::ListFor {
+                uids: uids.to_vec(),
+                marker,
+                limit,
+                result,
+            })
+            .await
+            .map_err(|_| Error::SendError)?;
+        command_result.await?
+    }
+
+    async fn head_command(&self, id: Id, with_data: bool) -> HeadResult {
+        let (result, command_result) = oneshot::channel();
+        self.sender
+            .send(Command::Head {
+                id,
+                with_data,
+                result,
+            })
+            .await
+            .map_err(|_| Error::SendError)?;
         command_result.await?
     }
 
@@ -665,7 +861,11 @@ impl Database {
             text,
             metadata,
             must_be_deleted,
-        } = entry.decrypt(password).await?.decompress().await?;
+        } = entry
+            .decrypt(password, &self.kdf)
+            .await?
+            .decompress()
+            .await?;
 
         let data = read::Data { text, metadata };
 
@@ -763,6 +963,9 @@ impl Database {
         command_result.await?
     }
 }
+
+#[cfg(test)]
+mod revision_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1014,19 +1217,37 @@ mod tests {
 
     #[tokio::test]
     async fn read_encrypted() -> Result<(), Box<dyn std::error::Error>> {
-        let db = new_db()?;
+        let limit = KdfLimit::new(std::num::NonZeroUsize::MIN, Duration::ZERO);
+        let db = new_db()?.with_kdf_limit(limit.clone());
 
-        let entry = write::Entry {
+        let entry = || write::Entry {
             text: "secret".to_string(),
             password: Some("pw".to_string()),
             burn_after_reading: Some(true),
             ..Default::default()
         };
 
-        let (id, _entry) = db.insert(entry).await?;
+        // With every derivation slot taken, neither an encrypted insert nor a password read
+        // derives, and the refused read consumes nothing.
+        let held = limit.acquire().await?;
+        assert!(matches!(
+            db.insert(entry()).await,
+            Err(Error::Crypto(crypto::Error::Busy))
+        ));
+        drop(held);
+
+        let (id, _entry) = db.insert(entry()).await?;
 
         // Without a password the content stays locked.
         assert!(matches!(db.get(id, None).await, Err(Error::NoPassword)));
+
+        let held = limit.acquire().await?;
+        assert!(matches!(
+            db.get(id, Some(Password::from("pw".as_bytes().to_vec())))
+                .await,
+            Err(Error::Crypto(crypto::Error::Busy))
+        ));
+        drop(held);
 
         // Encrypted takes precedence over burned, but the burn is still reported.
         let entry = db

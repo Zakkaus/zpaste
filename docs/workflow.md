@@ -46,7 +46,7 @@ command that does not exist yet, the branch that builds the check adds it to
 
 | Phase | Branches |
 | --- | --- |
-| P0 Preparation | `p0/rebrand`, `p0/rules-kit` (merged); `p0/ci`, `p0/docs`; the OpenAPI draft branch is not named yet |
+| P0 Preparation | `p0/rebrand`, `p0/rules-kit` (merged); `p0/ci`, `p0/docs`, `p0/openapi` |
 | P1 `/v1` reading endpoints and reading page | `p1/<topic>` |
 | P1b mermaid and mind map | `p1b/<topic>` |
 | P2 Edits and versions | `p2/<topic>` |
@@ -126,20 +126,41 @@ Before the release:
    `ghcr.io/zakkaus/zpaste`; note its digest.
 2. The migration and the full test suite have passed on a copy of the live
    database.
-3. The signing key and salt are read from the current `.env` (root 600, with
+3. The volume holding `state.db` has free space of at least the current size of
+   `state.db`: migration 8 copies every paste's stored bytes into revision 1,
+   so the file roughly doubles. Without the space the migration fails with
+   `SQLITE_FULL`, rolls back and leaves `user_version` at 7.
+4. The signing key and salt are read from the current `.env` (root 600, with
    `sudo`) and written to `/etc/zpaste/env` unchanged. If no salt was set, the
    upstream default `somesalt` is what the old service used, and it stays.
+5. `WASTEBIN_TRUSTED_PROXIES` in `/etc/zpaste/env` is the subnet of the
+   Docker network on which Traefik reaches the container, read on the host
+   with `docker network inspect traefik --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}'`.
+   Without it every request counts as coming from Traefik, and all readers
+   share one derivation rate. The setting trusts `CF-Connecting-IP` from
+   anything that reaches Traefik, so the firewall must admit only Cloudflare's
+   ranges (<https://www.cloudflare.com/ips-v4>,
+   <https://www.cloudflare.com/ips-v6>) on the HTTP and HTTPS ports first. A
+   container that Cloudflare reaches without Traefik lists Cloudflare's ranges
+   instead. `WASTEBIN_KDF_RATE` stays unset (10 per minute) until the owner
+   sets a value (architecture A3).
 
 Release steps:
 
 1. Stop every write on the old service, including burn-after-reading reads,
    which delete data. Back up `/opt/wastebin/data/state.db`.
 2. Copy the database to `/var/lib/zpaste/`, keeping uid 10001. Run the
-   migration and the full test suite on a second copy.
+   migration and the full test suite on a second copy. Check first that the
+   volume has free space of at least the current size of `state.db`; the
+   migration roughly doubles the file, and a full disk makes it roll back
+   (rerun after freeing space).
 3. Start the new image's digest from `/opt/zpaste/compose.yml`, with the same
    signing key, salt, Traefik labels and rate limit.
 4. Spot-check: an old paste, an encrypted paste, deleting as owner, creating
-   with gzpaste.
+   with gzpaste. Then send wrong passwords for an encrypted paste from one
+   client through Cloudflare in quick succession: the eleventh is 429, and a
+   second client is still answered 401, which shows the server keys the rate
+   by `CF-Connecting-IP` and not by Traefik's address.
 5. On failure, stop Zpaste. For P1, start the old service from the untouched
    `/opt/wastebin`. After P2, restore the backup, then switch back to the
    previous digest.

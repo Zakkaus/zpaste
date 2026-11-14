@@ -2,13 +2,16 @@ use std::num::NonZeroU32;
 
 use axum::Json;
 use axum::extract::State;
-use axum_extra::extract::cookie::Key;
+use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
+use crate::AppState;
 use crate::cache::valid_extension;
-use crate::errors::{Error, JsonErrorResponse};
+use crate::client::ClientKey;
+use crate::errors::{Error, json_error};
 use crate::handlers::extract::{sign_owner_token, verify_owner_token};
-use wastebin_core::db::{Database, write};
+use crate::service;
+use wastebin_core::db::write;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct Entry {
@@ -50,45 +53,49 @@ impl From<Entry> for write::Entry {
     }
 }
 
+/// The legacy JSON create, an adapter over [`service::create`].
 pub async fn post(
-    State(db): State<Database>,
-    State(key): State<Key>,
+    State(state): State<AppState>,
+    client: ClientKey,
     Json(entry): Json<Entry>,
-) -> Result<Json<RedirectResponse>, JsonErrorResponse> {
+) -> Response {
     if let Some(extension) = &entry.extension
         && !valid_extension(extension)
     {
-        return Err(Error::Id(wastebin_core::id::Error::IllegalCharacters).into());
+        return json_error(Error::Id(wastebin_core::id::Error::IllegalCharacters));
     }
 
     // Reuse the uid encoded in a valid `owner` token so a client can group its
     // pastes under one identity; otherwise mint a fresh uid. A raw uid is never
     // trusted — only a server-signed token is accepted, and an invalid one falls
     // back to minting rather than failing the request.
-    let uid = match entry
+    let owner = entry
         .owner
         .as_deref()
-        .and_then(|token| verify_owner_token(&key, token))
-    {
-        Some(uid) => uid,
-        None => db.next_uid().await.map_err(Error::Database)?,
+        .and_then(|token| verify_owner_token(&state.key, token));
+
+    let (head, uid) = match service::create(&state, client, entry.into(), owner).await {
+        Ok(created) => created,
+        Err(failure) => return json_error(failure.into()),
     };
+    let path = match &head.extension {
+        Some(extension) => format!("/{}.{extension}", head.id),
+        None => format!("/{}", head.id),
+    };
+    let owner = sign_owner_token(&state.key, uid);
 
-    let mut entry: write::Entry = entry.into();
-    entry.uid = Some(uid);
-
-    let (id, entry) = db.insert(entry).await.map_err(Error::Database)?;
-    let path = format!("/{}", id.to_url_path(&entry));
-    let owner = sign_owner_token(&key, uid);
-
-    Ok(Json::from(RedirectResponse { path, owner }))
+    Json::from(RedirectResponse { path, owner }).into_response()
 }
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+    use std::time::Duration;
+
     use crate::handlers::extract::PASSWORD_HEADER_NAME;
-    use crate::test_helpers::{Client, StoreCookies};
+    use crate::test_helpers::{Client, Settings, StoreCookies};
     use reqwest::StatusCode;
+    use wastebin_core::crypto::KdfLimit;
     use wastebin_core::db::write::Entry;
 
     #[test]
@@ -310,7 +317,15 @@ mod tests {
 
     #[tokio::test]
     async fn insert_encrypted() -> Result<(), Box<dyn std::error::Error>> {
-        let client = Client::new(StoreCookies(false)).await;
+        let kdf = KdfLimit::new(NonZeroUsize::MIN, Duration::ZERO);
+        let client = Client::with_settings(
+            StoreCookies(false),
+            Settings {
+                kdf: kdf.clone(),
+                ..Settings::default()
+            },
+        )
+        .await;
         let password = "SuperSecretPassword";
 
         let entry = Entry {
@@ -319,17 +334,34 @@ mod tests {
             ..Default::default()
         };
 
+        // The legacy create and read share the `/v1` derivation limit.
+        let held = kdf.acquire().await?;
+        let res = client.post_json().json(&entry).send().await?;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            res.headers().get(reqwest::header::RETRY_AFTER),
+            Some(&reqwest::header::HeaderValue::from_static("1"))
+        );
+        drop(held);
+
         let res = client.post_json().json(&entry).send().await?;
         assert_eq!(res.status(), StatusCode::OK);
 
         let payload = res.json::<super::RedirectResponse>().await?;
+        let read = || {
+            client
+                .get(&format!("/raw{}", payload.path))
+                .header(PASSWORD_HEADER_NAME, password)
+                .send()
+        };
 
-        let res = client
-            .get(&format!("/raw{}", payload.path))
-            .header(PASSWORD_HEADER_NAME, password)
-            .send()
-            .await?;
+        let held = kdf.acquire().await?;
+        let res = read().await?;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(res.headers().contains_key(reqwest::header::RETRY_AFTER));
+        drop(held);
 
+        let res = read().await?;
         assert_eq!(res.status(), StatusCode::OK);
         assert_eq!(res.text().await?, "FooBarBaz");
 

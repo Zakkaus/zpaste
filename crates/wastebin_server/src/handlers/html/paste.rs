@@ -7,12 +7,12 @@ use axum_extra::extract::cookie::Key as CookieKey;
 use serde::Deserialize;
 
 use crate::cache::{Key, Mode};
+use crate::client::{ClientKey, RateLimit};
 use crate::handlers::extract::{Theme, Uids, verify_owner_token};
-use crate::handlers::html::{
-    BurnConfirmation, ErrorResponse, FormAction, PasswordInput, make_error,
-};
+use crate::handlers::html::{BurnConfirmation, FormAction, PasswordInput, make_error_response};
 use crate::handlers::{NoStore, uid_cookie};
 use crate::i18n::Lang;
+use crate::service;
 use crate::{Cache, Database, Highlighter, Page};
 use wastebin_core::crypto::Password;
 use wastebin_core::db;
@@ -65,6 +65,8 @@ pub async fn get<E>(
     State(cache): State<Cache>,
     State(page): State<Page>,
     State(db): State<Database>,
+    State(rate): State<RateLimit>,
+    client: ClientKey,
     State(highlighter): State<Highlighter>,
     State(cookie_key): State<CookieKey>,
     Path(id): Path<String>,
@@ -74,7 +76,7 @@ pub async fn get<E>(
     theme: Option<Theme>,
     lang: Lang,
     form: Result<Form<PasteForm>, E>,
-) -> Result<Response, ErrorResponse> {
+) -> Response {
     if let Some(token) = handoff.owner.as_deref()
         && let Some(claimed_uid) = verify_owner_token(&cookie_key, token)
     {
@@ -86,7 +88,7 @@ pub async fn get<E>(
             new_uids.push(claimed_uid);
         }
         let cookie = uid_cookie(&new_uids);
-        return Ok((jar.add(cookie), Redirect::to(&format!("/{id}"))).into_response());
+        return (jar.add(cookie), Redirect::to(&format!("/{id}"))).into_response();
     }
 
     async {
@@ -110,6 +112,11 @@ pub async fn get<E>(
                 action: FormAction::source(&key),
             }
             .into_response());
+        }
+
+        // A password derives a key only for an encrypted paste; a plain one ignores it.
+        if password.is_some() && metadata.encrypted {
+            service::admit(&rate, client)?;
         }
 
         let (data, is_available, encrypted) = match db.get(key.id, password).await {
@@ -184,7 +191,7 @@ pub async fn get<E>(
         })
     }
     .await
-    .map_err(|err| make_error(err, page, theme, lang))
+    .unwrap_or_else(|err: crate::Error| make_error_response(err, page, theme, lang))
 }
 
 #[cfg(test)]

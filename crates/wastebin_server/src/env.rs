@@ -1,18 +1,21 @@
 use std::env::VarError;
 use std::fmt::Display;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::num::{NonZeroUsize, ParseIntError};
+use std::num::{NonZeroU32, NonZeroUsize, ParseIntError};
 use std::path::PathBuf;
 use std::time::Duration;
 
 use axum_extra::extract::cookie::Key;
 
+use wastebin_core::crypto::KdfLimit;
 use wastebin_core::env::vars::{
-    self, ADDRESS_PORT, BASE_URL, CACHE_SIZE, DATABASE_PATH, HTTP_TIMEOUT, MAX_BODY_SIZE,
-    PASTE_EXPIRATIONS, SIGNING_KEY,
+    self, ADDRESS_PORT, BASE_URL, CACHE_SIZE, DATABASE_PATH, HTTP_TIMEOUT, KDF_CONCURRENCY,
+    KDF_RATE, MAX_BODY_SIZE, PASTE_EXPIRATIONS, SIGNING_KEY, TRUSTED_PROXIES,
 };
 use wastebin_core::{db, expiration};
 use wastebin_highlight::{Theme, theme::ParseThemeNameError};
+
+use crate::client::{RateLimit, TrustedProxies};
 
 pub const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -32,6 +35,12 @@ pub(crate) enum Error {
     BaseUrl(String),
     #[error("failed to generate key from {SIGNING_KEY}: {0}")]
     SigningKey(String),
+    #[error("failed to parse {KDF_CONCURRENCY}, expected a positive number: {0}")]
+    KdfConcurrency(ParseIntError),
+    #[error("failed to parse {KDF_RATE}, expected a positive number: {0}")]
+    KdfRate(ParseIntError),
+    #[error("failed to parse {TRUSTED_PROXIES}: {0}")]
+    TrustedProxies(String),
     #[error("failed to parse {HTTP_TIMEOUT}: {0}")]
     HttpTimeout(ParseIntError),
     #[error("failed to parse {PASTE_EXPIRATIONS}: {0}")]
@@ -149,6 +158,37 @@ pub fn http_timeout() -> Result<Duration, Error> {
             |s| s.parse::<u64>().map(|v| Duration::new(v, 0)),
         )
         .map_err(Error::HttpTimeout)
+}
+
+/// Limit on concurrent password key derivations; [`KdfLimit::DEFAULT_CONCURRENCY`] unless set.
+pub fn kdf_limit() -> Result<KdfLimit, Error> {
+    let concurrency = std::env::var(vars::KDF_CONCURRENCY)
+        .map_or_else(
+            |_| Ok(KdfLimit::DEFAULT_CONCURRENCY),
+            |s| s.parse::<NonZeroUsize>(),
+        )
+        .map_err(Error::KdfConcurrency)?;
+
+    Ok(KdfLimit::new(concurrency, KdfLimit::DEFAULT_WAIT))
+}
+
+/// Per-client rate of key derivations, [`RateLimit::DEFAULT_PER_MINUTE`] when unset.
+pub fn kdf_rate() -> Result<RateLimit, Error> {
+    let rate = std::env::var(vars::KDF_RATE)
+        .map_or_else(
+            |_| Ok(RateLimit::DEFAULT_PER_MINUTE),
+            |s| s.parse::<NonZeroU32>(),
+        )
+        .map_err(Error::KdfRate)?;
+
+    Ok(RateLimit::per_minute(rate))
+}
+
+/// Trusted proxies, none when unset.
+pub fn trusted_proxies() -> Result<TrustedProxies, Error> {
+    std::env::var(vars::TRUSTED_PROXIES)
+        .map_or_else(|_| Ok(TrustedProxies::default()), |s| s.parse())
+        .map_err(Error::TrustedProxies)
 }
 
 /// Parse [`expiration::ExpirationSet`] from environment or return default.

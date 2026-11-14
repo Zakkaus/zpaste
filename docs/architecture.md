@@ -38,7 +38,7 @@ what fails when it is broken, so a change can be judged against it.
 | 8 | A write authenticated by cookie must carry an `Origin` equal to the configured public URL (scheme, host and port); forwarded headers are not trusted. Bearer requests skip this check. | Another site makes the reader's browser edit or delete their pastes (CSRF). | Target, P1 |
 | 9 | A Bearer token that fails verification returns 401. The server never mints a new identity in its place. | A client's pastes split across identities without notice, and "my pastes" loses some of them. | Target, P1 |
 | 10 | Every path that runs the password key derivation shares one concurrency limit and one per-IP rate limit, and answers 429 with `Retry-After` past it. | Parallel wrong-password requests exhaust memory: each derivation takes 64 MiB. | Target, P1 |
-| 11 | The client IP is taken from `CF-Connecting-IP` only when the connection comes from a Cloudflare address range; otherwise from the connection itself. | A client sets the header and escapes the rate limit. | Target, P1 |
+| 11 | The client IP is taken from `CF-Connecting-IP` only when the connection comes from a configured trusted proxy (`WASTEBIN_TRUSTED_PROXIES`: Cloudflare's ranges, or the local Traefik hop while the firewall admits only Cloudflare); otherwise from the connection itself. No other forwarding header is read. | A client sets the header and escapes the rate limit. | Target, P1 |
 | 12 | An expired paste and a missing paste give the same 404, and a paste's history is deleted with it. | The API tells a caller which ids existed, and history outlives the paste it belongs to. | Target, P1 (404), P2 (history) |
 | 13 | The OpenAPI file is generated from the Rust handlers, and the frontend types are generated from that file; neither is edited by hand. | Server and client drift apart while both still compile. | Target, P0 draft, P1 checks |
 | 14 | A failed migration stops the server before it serves traffic. | The server accepts requests against a half-migrated schema and writes bad rows. | Current (upstream migrates at start-up) |
@@ -181,7 +181,7 @@ flowchart LR
 | --- | --- | --- |
 | Image build | Three stages: Node builds the web app, Rust builds a static musl executable that embeds it, a minimal base (distroless or scratch) runs it as uid 10001. | The CI change is a separate P0 task. |
 | Registry | `ghcr.io/zakkaus/zpaste:<version>`. Compose pins the digest, not the tag, so a rollback is a digest swap. | The version scheme is open. |
-| Configuration | `/etc/zpaste/env`, root 600, values moved from the current setup unchanged (invariant 2). Variables keep the `WASTEBIN_` prefix. | |
+| Configuration | `/etc/zpaste/env`, root 600, values moved from the current setup unchanged (invariant 2). Variables keep the `WASTEBIN_` prefix. New in P1: `WASTEBIN_KDF_RATE` and `WASTEBIN_TRUSTED_PROXIES` ("Reliability"). | The trusted proxy range for matrix is read from the host at release ([workflow.md](workflow.md)). |
 | Data | `/var/lib/zpaste/state.db`, owned by uid 10001. Backups cover `/var/lib/zpaste`. | The backup schedule is open. |
 | Network | Target: Cloudflare is the only way in; the host firewall accepts origin traffic from Cloudflare ranges only. Host rules (firewall edits, rootless Docker) are in [workflow.md](workflow.md#deployment-and-rollback). | |
 
@@ -309,13 +309,17 @@ gzpaste ships with P1.
 
 The contract pipeline: utoipa annotations on the handlers produce the OpenAPI
 file, committed to the repository; openapi-typescript turns it into frontend
-types; openapi-fetch is the typed client. All three are pinned, and the
-versions are chosen in P0 (open until then). CI regenerates both outputs and
-compares them byte for byte, type-checks the frontend, and runs a contract test
-that starts the server in-process and sends every row of the endpoint table
-implemented so far, each error status included, validating status, headers
-and body against the OpenAPI file. The regeneration check alone cannot show
-that a handler answers as the file says, which is why the contract test exists.
+types; openapi-fetch is the typed client. All three are pinned (A1, settled
+in P0): utoipa 6.0.0, openapi-typescript 7.13.0 with TypeScript 5.9.3, and
+openapi-fetch 0.17.0; `docs/api/README.md` records the check and what utoipa
+cannot express. Current: `cargo test` regenerates the OpenAPI document and
+fails when the committed file differs from it as a parsed structure, and runs
+a contract test that starts the server in-process and sends every row of the
+endpoint table implemented so far, each error status included, validating
+status, headers and body against the generated document. Target, P1: CI also
+regenerates the frontend types and type-checks the frontend. The regeneration
+check alone cannot show that a handler answers as the file says, which is why
+the contract test exists.
 
 ## Identity model
 
@@ -344,8 +348,12 @@ identity's gives one 400, so it reveals nothing about the id.
 
 ## Revisions
 
-Target: the `revisions` table arrives in P1, so the `version_id` and `ETag` of a
-create response are real from the first day; edits open in P2.
+Current: the `revisions` table exists (migration 8). Every create writes
+version 1 in the same transaction as the paste, and the migration wrote version 1
+for every older paste, so the `version_id` and `ETag` of a create response are
+real from the first day. Current: `POST /v1/pastes`, `GET /v1/pastes/{id}` and
+`GET /v1/pastes/{id}/content` carry them, read from the head revision without
+consuming the paste. Target, P2: edits.
 
 A version id is a hash chain, as in git:
 
@@ -390,10 +398,13 @@ flowchart TD
 - History is linear: any conflict is 412. Whether branches are ever allowed is
   left to a later decision by Zephyr (open).
 - History stores the bytes as stored, ciphertext and nonce included. It is
-  deleted with the paste. History endpoints check existence and expiry before
-  permission.
-- One paste's total history is capped at a multiple of
-  `WASTEBIN_MAX_BODY_SIZE`. The multiple is open.
+  deleted with the paste: a trigger on `entries` removes the revisions on every
+  delete, burn and purge included (current). History endpoints check existence
+  and expiry before permission.
+- One paste's total history is capped at 4 × `WASTEBIN_MAX_BODY_SIZE` (owner
+  ruling A10, 2026-11-15). After each write the oldest versions are trimmed
+  until both the 20-version and the size limit hold, so a paste may keep fewer
+  than 20 versions; the cap never refuses a write.
 - The migration backfills a first version for every existing paste from its
   stored bytes, nonce and title, without decrypting and without consuming
   burn-after-reading pastes. `extension` and `created_at` stay empty for them.
@@ -435,7 +446,7 @@ Target, P1:
 
 | Route | Becomes |
 | --- | --- |
-| `POST /`, `/raw/<id>`, `DELETE /<id>` | Thin adapters over the `/v1` services (invariant 1). One set of scenario tests runs against both paths. |
+| `POST /`, `/raw/<id>`, `DELETE /<id>` | Thin adapters over the `/v1` services (invariant 1). One set of scenario tests runs against both paths. Current for `POST /`, `POST /new`, `/raw/<id>` and `/dl/<id>`: they call `crates/wastebin_server/src/service.rs`, as `/v1` does, and keep upstream's statuses (403 for a wrong password, the HTML password form for a missing one); `/raw` and `/dl` consume a burn paste on read, as upstream did. `v1::tests::legacy` runs the scenarios through every create route and every read route: `/raw`, `/dl`, the HTML page and `/v1`. |
 | `/md/<id>.<ext>` | 302 to `/<id>.<ext>`. |
 | `/burn`, `/dl`, `/qr` | Kept. |
 | `GET /<id>[.<ext>]` | The HTML shell. |
@@ -448,29 +459,69 @@ and the web app replace them.
 ## Storage and migrations
 
 Current: SQLite through rusqlite. Migrations are embedded SQL files applied by
-rusqlite_migration at start-up; there are seven, the last adding the title
-column. Content is zstd-compressed. An encrypted paste is sealed with
-XChaCha20-Poly1305 under a key derived by Argon2i from the password and
-`WASTEBIN_PASSWORD_SALT`.
+rusqlite_migration at start-up; there are eight, the last adding the
+`revisions` table and the `extension` and `created_at` columns. Content is
+zstd-compressed. An encrypted paste is sealed with XChaCha20-Poly1305 under a
+key derived by Argon2i from the password and `WASTEBIN_PASSWORD_SALT`.
 
 Target migrations:
 
 | Phase | Change |
 | --- | --- |
-| P1 | `extension` column (set at creation, never changed; empty for old pastes); `created_at` column (empty for old pastes); `revisions` table with the backfill described above. |
 | P2b | `workspaces` and `entries` tables. |
 
-The P1 migration is first verified on a copy of the live database. An older
-executable refuses a migrated database (`DatabaseTooFarAhead`), so a rollback
-past a migration restores the backup; see [workflow.md](workflow.md).
+Migration 8 (P1) adds the `extension` column (set at creation, never changed;
+empty for old pastes), the `created_at` column (empty for old pastes) and the
+`revisions` table with the backfill described above. Revision 1 copies every
+paste's stored bytes, so `state.db` roughly doubles, and the entry row keeps
+its own copy until P2 may store the current content only once. The migration
+runs in one transaction: if the volume is full it fails with `SQLITE_FULL`,
+rolls back, and `user_version` stays 7; rerun it after freeing space.
+
+It was verified on a copy of the live database on 2026-11-15: 867 entries (19
+encrypted, 2 burn-after-reading, 268 expired) gained 867 revisions, with 0
+mismatches against version ids computed by an independent Python hasher;
+`PRAGMA integrity_check` answered `ok`, `user_version` read 8, and `/raw`
+returned a sha256 identical to the old build's for all 590 readable ids. The
+file grew from 7,368,704 to 14,782,464 bytes; the migration took 0.156 s on a
+debug build, process start included.
+
+An older executable refuses a migrated database (`DatabaseTooFarAhead`), so a
+rollback past a migration restores the backup; see [workflow.md](workflow.md).
 
 ## Reliability
 
 - **Password key derivation.** Upstream's Argon2i uses 64 MiB of memory, 10
   iterations and 4 lanes per derivation. The parameters stay, because changing
   them would make existing encrypted pastes unreadable. The shared concurrency
-  limit and the per-IP rate limit (invariants 10, 11) bound the memory. Their
-  values are open and belong in `REQUIREMENTS.md`.
+  limit and the per-IP rate limit (invariants 10, 11) bound the memory.
+  The server's tests derive with Argon2's cheapest parameters through the
+  `wastebin_core` feature `test-fast-kdf`, which only the server's
+  dev-dependency enables and which refuses to compile in an optimized build:
+  the server's tests prove request logic, and `wastebin_core`'s own tests,
+  which ignore the feature, prove the encryption at production cost.
+  Current: the concurrency limit is built in `Database` (`crypto::KdfLimit`),
+  so every derivation path, `/v1` and legacy, passes through it. It allows
+  `WASTEBIN_KDF_CONCURRENCY` derivations at once (default 2, 128 MiB); a
+  request waits up to 1 s for a slot, then gets 429 with `Retry-After: 1`.
+  Current: the per-client rate is built in front of it
+  (`crates/wastebin_server/src/client.rs`). A client may start
+  `WASTEBIN_KDF_RATE` derivations per minute, with a burst of the same number
+  (default 10, A3); past that it gets 429 with `Retry-After` set to the seconds
+  until it may derive again. Only a request about to derive spends one:
+  credential, `Origin`, body and 404 answers come first, and a read of a plain
+  paste never counts. `/v1`, the legacy create and read routes and the HTML
+  password form all count against the same rate.
+- **Client address.** The rate is kept per client: the connection's address,
+  or `CF-Connecting-IP` when the connection comes from a range in
+  `WASTEBIN_TRUSTED_PROXIES` (comma-separated CIDR ranges or addresses, plus
+  `unix` to trust a Unix-socket peer). The default is empty: every request is
+  keyed by its own connection, and `X-Forwarded-For` is never read. An IPv6
+  client is keyed by its /64. Untrusted Unix-socket connections have no
+  address and share one key. On matrix the connection comes from Traefik, so
+  the setting is Traefik's Docker network; that is sound only while the
+  firewall admits nothing but Cloudflare, which is the "Origin exposure"
+  target below.
 - **Two rate-limit layers.** Traefik limits every request (average 8, burst 40).
   Zpaste limits only the derivation paths. Both stay.
 - **Origin exposure.** Target: the origin accepts Cloudflare only, so the per-IP limit
@@ -518,16 +569,16 @@ Points the plan does not decide. Each blocks the phase named.
 
 | # | Item | Blocks |
 | --- | --- | --- |
-| A1 | Version tags of utoipa, openapi-typescript and openapi-fetch that work together. | P0 (contract draft) |
+| A1 | Settled 2026-11-15: utoipa 6.0.0, openapi-typescript 7.13.0 (with TypeScript 5.9.3) and openapi-fetch 0.17.0 work together; evidence and gaps in `docs/api/README.md`, "Generating the contract in P1". | P0 (contract draft) |
 | A2 | Image version scheme for `ghcr.io/zakkaus/zpaste:<version>`. | P0 (CI) |
-| A3 | Values of the derivation concurrency limit and per-IP rate. | P1 |
+| A3 | Value of the per-IP derivation rate (built in P1 with a default of 10 per minute and a burst of 10, `WASTEBIN_KDF_RATE`, awaiting the owner), and confirmation of the concurrency default (2, `WASTEBIN_KDF_CONCURRENCY`). | P1 |
 | A4 | Whether the shell answers HTTP 404 or 200 for a missing or expired id (the app shows the same screen either way). | P1 |
 | A5 | Fate of `POST /{id}`, `POST /new`, `POST /delete/{id}` and `/theme` once the upstream forms are gone. | P1 |
 | A6 | Fate of `wastebin_highlight` and `wastebin_theme_showcase` once the server stops highlighting. | P1 |
 | A7 | The test domain on which the new frontend is accepted before the switch (plan section 七). | P1 |
 | A8 | Backup schedule for `/var/lib/zpaste`. | P1 release |
 | A9 | Who tracks upstream security fixes (plan section 四 asks for one named person). | P1 |
-| A10 | The multiple of `WASTEBIN_MAX_BODY_SIZE` that caps one paste's history. | P2 |
+| A10 | Settled 2026-11-15 (「單一 paste 的歷史總大小 可以」): the cap is 4 × `WASTEBIN_MAX_BODY_SIZE` per paste, and trimming the oldest versions until both limits hold may leave fewer than 20; see "Revisions" and `docs/api/README.md`, "Owner rulings". | P2 |
 | A11 | Whether history may branch (left to Zephyr). | After P2 |
 | A12 | How a squatted slug is reclaimed without an admin panel, and what removes empty workspaces after 30 days. | P2b |
 | A13 | How the reading page's policy admits Astryx's two run-time `<style>` elements: their `sha256` hashes (exact, but pinned to the Astryx version, so an upgrade must update them) or `'unsafe-inline'` for styles only (the app renders no raw HTML, so only CSS from Astryx reaches the page). `shoot.ts` uses `'unsafe-inline'` until this is decided. | P1 slice 4 |

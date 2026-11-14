@@ -2,31 +2,33 @@ use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 
 use crate::cache::Key;
+use crate::client::ClientKey;
 use crate::handlers::NoStore;
 use crate::handlers::extract::{Password, Theme};
-use crate::handlers::html::{ErrorResponse, FormAction, PasswordInput, make_error};
+use crate::handlers::html::{FormAction, PasswordInput, make_error_response};
 use crate::i18n::Lang;
-use crate::{Database, Page};
-use wastebin_core::db;
-use wastebin_core::db::read::Entry;
+use crate::service::{self, Content, Failure};
+use crate::{AppState, Page};
 
-/// GET handler for raw content of a paste.
+/// GET handler for raw content of a paste, an adapter over [`service::read`]. Reading is the
+/// confirmation upstream's route always implied, so a burn-after-reading paste is consumed.
 pub async fn get(
     Path(id): Path<String>,
-    State(db): State<Database>,
+    State(state): State<AppState>,
     State(page): State<Page>,
+    client: ClientKey,
     theme: Option<Theme>,
     lang: Lang,
     password: Option<Password>,
-) -> Result<Response, ErrorResponse> {
+) -> Response {
     async {
         let password = password.map(|Password(password)| password);
         let key: Key = id.parse()?;
 
-        match db.get(key.id, password).await {
-            Ok(Entry::Regular(data) | Entry::Burned(data)) => Ok(data.text.into_response()),
-            Ok(Entry::Encrypted(data)) => Ok(data.text.into_response().no_store()),
-            Err(db::Error::NoPassword) => Ok(PasswordInput {
+        match service::read(&state, client, key.id, password, true).await {
+            Ok(Content { head, text }) if head.encrypted => Ok(text.into_response().no_store()),
+            Ok(Content { text, .. }) => Ok(text.into_response()),
+            Err(Failure::PasswordRequired) => Ok(PasswordInput {
                 page: page.clone(),
                 theme: theme.clone(),
                 lang,
@@ -38,7 +40,7 @@ pub async fn get(
         }
     }
     .await
-    .map_err(|err| make_error(err, page, theme, lang))
+    .unwrap_or_else(|err: crate::Error| make_error_response(err, page, theme, lang))
 }
 
 #[cfg(test)]

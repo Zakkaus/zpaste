@@ -5,3 +5,4 @@ pub mod db;
 pub mod env;
 pub mod expiration;
 pub mod id;
+pub mod revision;

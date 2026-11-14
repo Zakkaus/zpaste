@@ -1,12 +1,15 @@
 mod assets;
 mod cache;
+mod client;
 mod env;
 mod errors;
 mod handlers;
 mod i18n;
 mod page;
+mod service;
 #[cfg(test)]
 mod test_helpers;
+mod v1;
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -19,8 +22,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{MethodRouter, Router, get, post};
 use axum_extra::extract::cookie::Key;
 use http::header::{
-    CONTENT_SECURITY_POLICY, REFERRER_POLICY, SERVER, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
-    X_XSS_PROTECTION,
+    CONTENT_SECURITY_POLICY, REFERRER_POLICY, RETRY_AFTER, SERVER, X_CONTENT_TYPE_OPTIONS,
+    X_FRAME_OPTIONS, X_XSS_PROTECTION,
 };
 use tokio::net::{TcpListener, UnixListener};
 use tower::ServiceBuilder;
@@ -50,11 +53,20 @@ pub(crate) struct AppState {
     key: Key,
     page: Page,
     highlighter: Highlighter,
+    /// Per-client rate of password key derivations.
+    rate: client::RateLimit,
+    proxies: Arc<client::TrustedProxies>,
 }
 
 impl FromRef<AppState> for Key {
     fn from_ref(state: &AppState) -> Self {
         state.key.clone()
+    }
+}
+
+impl FromRef<AppState> for client::RateLimit {
+    fn from_ref(state: &AppState) -> Self {
+        state.rate.clone()
     }
 }
 
@@ -120,9 +132,24 @@ async fn handle_service_errors(
     req: Request,
     next: Next,
 ) -> Response {
-    let response = next.run(req).await;
+    // `/v1` answers errors with its own JSON envelope.
+    let html = !v1::is_v1(req.uri().path());
+    let mut response = next.run(req).await;
+
+    if !html {
+        return response;
+    }
 
     match response.status() {
+        // The key-derivation limit refused the request (`errors::Error`); the HTML and JSON
+        // bodies stay as the handler made them.
+        StatusCode::TOO_MANY_REQUESTS => {
+            response
+                .headers_mut()
+                .entry(RETRY_AFTER)
+                .or_insert(errors::RETRY_AFTER);
+            response
+        }
         StatusCode::PAYLOAD_TOO_LARGE => (
             StatusCode::PAYLOAD_TOO_LARGE,
             html::Error {
@@ -198,7 +225,8 @@ fn make_app(state: AppState, timeout: Duration, max_body_size: usize) -> Router 
         app = app.route(asset.route(), asset_route(asset));
     }
 
-    app.route("/", get(html::index::get).post(insert::api::post))
+    app.merge(v1::router())
+        .route("/", get(html::index::get).post(insert::api::post))
         .route("/robots.txt", get(robots::get))
         .route("/theme", get(theme::get))
         .route("/new", post(insert::form::post))
@@ -225,6 +253,7 @@ fn make_app(state: AppState, timeout: Duration, max_body_size: usize) -> Router 
                         .compress_when(DefaultPredicate::new().and(SizeAbove::new(256))),
                 )
                 .layer(TraceLayer::new_for_http())
+                .layer(from_fn(v1::envelope))
                 .layer(TimeoutLayer::with_status_code(
                     StatusCode::REQUEST_TIMEOUT,
                     timeout,
@@ -245,12 +274,16 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
     let max_body_size = env::max_body_size()?;
     let base_url = env::base_url()?;
     let timeout = env::http_timeout()?;
+    let kdf_limit = env::kdf_limit()?;
+    let rate = env::kdf_rate()?;
+    let proxies = Arc::new(env::trusted_proxies()?);
     let expirations = env::expiration_set()?;
     let theme = env::theme()?;
     let title = env::title();
 
     let cache = Cache::new(cache_size)?;
     let (db, db_handler) = Database::new(method)?;
+    let db = db.with_kdf_limit(kdf_limit);
 
     tracing::debug!("serving on {socket_type}");
     tracing::debug!("caching {cache_size} paste highlights");
@@ -271,9 +304,12 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
         key,
         page,
         highlighter,
+        rate,
+        proxies,
     };
 
-    let app = make_app(state, timeout, max_body_size);
+    let app = make_app(state, timeout, max_body_size)
+        .into_make_service_with_connect_info::<client::Peer>();
 
     let serve = async {
         match socket_type {
