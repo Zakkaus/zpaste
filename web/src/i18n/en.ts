@@ -21,6 +21,7 @@ export const en = {
   'action.actions': 'Paste actions',
   'outline.label': 'On this page',
   'outline.open': 'Outline',
+  'outline.drawerNav': 'Sections',
   'theme.toDark': 'Switch to dark mode',
   'theme.toLight': 'Switch to light mode',
 } as const;

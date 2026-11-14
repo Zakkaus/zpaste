@@ -139,7 +139,7 @@ export function OutlineDrawer({items}: {items: OutlineItem[]}) {
         <Outline
           ref={outline}
           items={items}
-          label={t('outline.label')}
+          label={t('outline.drawerNav')}
           density="default"
           onActiveIdChange={setCurrent}
           className={css.drawer}
