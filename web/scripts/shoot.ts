@@ -4,20 +4,25 @@
 // first column of at most half of it, that no table cell wraps inside a name, that the outline marks
 // the section on screen, and that the phone outline drawer takes focus and gives it back. A second,
 // generated paste of 1,600 lines (longFixture.ts) checks that an outline taller than the desktop rail
-// still follows the page and keeps the current entry in view, and measures scrolling through it.
+// still follows the page and keeps the current entry in view, and measures scrolling through it. The
+// theme checks: the Copy button paints its final colour from the first frame, the light/dark switch
+// changes the theme, survives a reload without a frame of the other theme and follows the OS while no
+// choice is stored. From tablet width up a table of up to three columns fits its box.
 //
-//   node scripts/shoot.ts <out-dir>        ZPASTE_FIXTURE=<file.md> picks the paste; CHROME=<path> the browser.
+//   node scripts/shoot.ts <out-dir>        ZPASTE_FIXTURE=<file.md> picks the paste; CHROME=<path> the browser;
+//                                          ZPASTE_DIST=<dir> another build (default web/dist).
 //
 // Exit 1 when a check fails, 2 when it cannot run.
 import {createServer, type Server} from 'node:http';
 import {mkdirSync, readFileSync} from 'node:fs';
 import {extname, join, normalize} from 'node:path';
 import {chromium, type Browser, type Page} from '@playwright/test';
+import {THEME_ATTRIBUTE, THEME_STORAGE_KEY} from '../src/chrome/themeMode.ts';
 import {en} from '../src/i18n/en.ts';
 import {embeddedPaste, fixturePaste, withEmbeddedPaste} from './fixture.ts';
 import {longMarkdown} from './longFixture.ts';
 
-const DIST = new URL('../dist/', import.meta.url).pathname;
+const DIST = process.env.ZPASTE_DIST ?? new URL('../dist/', import.meta.url).pathname;
 const TYPES: Record<string, string> = {'.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.woff': 'font/woff'};
 const SHOTS = [
   {name: '1280-light', width: 1280, height: 800, scheme: 'light'},
@@ -29,15 +34,23 @@ const WIDTHS = [320, 360, 390, 768, 1024, 1280];
 /** Phone widths at which a wide table's fixed first column takes at most FIRST_COLUMN_MAX of its box. */
 const FIRST_COLUMN_WIDTHS = [360, 390];
 const FIRST_COLUMN_MAX = 0.5;
+/**
+ * Tablet, laptop and desktop widths at which a table of at most FIT_COLUMNS columns fits its box without
+ * scrolling. The code face is the OS's (SF Mono, Consolas, ...), so a table that fits only just here can
+ * scroll on another system; 768 px keeps a margin for that.
+ */
+const FIT_WIDTHS = [768, 1010, 1280];
+const FIT_COLUMNS = 3;
 /** Where the generated long paste is served. */
 const LONG_PATH = '/long';
 const OUTLINE = `nav[aria-label="${en['outline.label']}"]`;
+const COPY = `[role="group"][aria-label="${en['action.actions']}"] button`;
 
-/** Serves `pages[path]` for each page path (`/` and LONG_PATH) and dist/assets for the rest. */
+/** Serves `pages[path]` for each page path (`/` and LONG_PATH) and dist/ for the rest. */
 function serve(pages: Record<string, string>): Promise<Server> {
   const server = createServer((request, response) => {
     const path = normalize(new URL(request.url ?? '/', 'http://x').pathname);
-    if (path.startsWith('/assets/')) {
+    if (pages[path] == null) {
       try {
         const body = readFileSync(join(DIST, path));
         response.writeHead(200, {'content-type': TYPES[extname(path)] ?? 'application/octet-stream'}).end(body);
@@ -300,8 +313,145 @@ async function checkWidthsAndTables(browser: Browser, url: string, name: string)
         `${wraps.inside.length} wraps inside a name, ${wraps.oversize.length} inside a piece wider than the cap${wraps.oversize.length > 0 ? `: ${wraps.oversize.join('; ')}` : ''}`,
     );
   }
+  for (const width of FIT_WIDTHS) {
+    await page.setViewportSize({width, height: 800});
+    const tables = await page.evaluate(() =>
+      [...document.querySelectorAll<HTMLElement>('.astryx-markdown .astryx-table-scroll-wrapper')].map(box => ({
+        columns: box.querySelector('tr')?.children.length ?? 0,
+        overflow: box.scrollWidth - box.clientWidth,
+        heading: box.closest('.astryx-markdown-table')?.previousElementSibling?.textContent?.slice(0, 40) ?? '',
+      })),
+    );
+    const narrow = tables.filter(table => table.columns <= FIT_COLUMNS);
+    for (const table of narrow) {
+      check(table.overflow <= 0, `${name} ${width}px: a ${table.columns}-column table after "${table.heading}" scrolls by ${table.overflow}px`);
+    }
+    console.log(`${name} ${width}px: ${narrow.length} tables of at most ${FIT_COLUMNS} columns, ${tables.filter(table => table.overflow > 0).length} of ${tables.length} tables scroll`);
+  }
   console.log(`${name}: checked ${WIDTHS.join(', ')} px; ${boxes.length} tables, ${wide.length} wider than the column at 390 px`);
   await context.close();
+}
+
+/**
+ * Records, on every animation frame from the one where the Copy button first exists, its background and
+ * the root's colour scheme: what that frame paints. Installed before the page's own scripts.
+ */
+function recordFirstFrames() {
+  const frames: string[] = [];
+  Object.assign(window, {zpasteFrames: frames});
+  const tick = () => {
+    const button = document.querySelector('[role="group"] button');
+    if (button != null) frames.push(`${getComputedStyle(button).backgroundColor}|${getComputedStyle(document.documentElement).colorScheme}`);
+    if (frames.length < 30) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+/** The frames recordFirstFrames saw, once 30 have passed. */
+async function firstFrames(page: Page): Promise<string[]> {
+  await page.waitForFunction(() => ((window as unknown as {zpasteFrames?: string[]}).zpasteFrames?.length ?? 0) >= 30);
+  return page.evaluate(() => (window as unknown as {zpasteFrames: string[]}).zpasteFrames);
+}
+
+/** The Copy button's colour in a recordFirstFrames entry. */
+const copyColour = (frame: string) => frame.split('|')[0];
+
+/** What a frame of the settled page paints, in recordFirstFrames' terms, once colour transitions have ended. */
+function paintedNow(page: Page): Promise<string> {
+  return page.evaluate(async selector => {
+    await Promise.all(document.getAnimations().map(animation => animation.finished.catch(() => undefined)));
+    return `${getComputedStyle(document.querySelector(selector)!).backgroundColor}|${getComputedStyle(document.documentElement).colorScheme}`;
+  }, COPY);
+}
+
+/**
+ * The colour checks. In each OS mode the Copy button paints its final colour from the first frame it
+ * exists in. The light/dark switch in the top bar has an accessible name and a 44 px touch target at
+ * phone width; from the keyboard it switches a light page to dark, the choice survives a reload with no
+ * light frame first, and a second press goes back to following the OS, which a page then follows live.
+ */
+async function checkTheme(browser: Browser, url: string, out: string) {
+  const painted: Record<string, string> = {};
+  for (const scheme of ['light', 'dark'] as const) {
+    const context = await browser.newContext({viewport: {width: 1280, height: 800}, colorScheme: scheme});
+    await context.addInitScript(recordFirstFrames);
+    const page = await context.newPage();
+    await page.goto(url, {waitUntil: 'networkidle'});
+    const frames = await firstFrames(page);
+    painted[scheme] = await paintedNow(page);
+    const other = frames.filter(frame => frame !== painted[scheme]);
+    check(other.length === 0, `theme ${scheme}: the first frames paint ${JSON.stringify([...new Set(other)])} before ${painted[scheme]}`);
+    await context.close();
+  }
+  const lightCopy = copyColour(painted.light ?? '');
+  const darkCopy = copyColour(painted.dark ?? '');
+  check(lightCopy !== darkCopy, `theme: light and dark paint the same Copy button (${lightCopy})`);
+
+  const context = await browser.newContext({viewport: {width: 390, height: 844}, colorScheme: 'light', deviceScaleFactor: 2});
+  const page = await context.newPage();
+  page.on('pageerror', error => failures.push(`theme: page error: ${error.message}`));
+  await page.goto(url, {waitUntil: 'networkidle'});
+  const toDark = page.getByRole('button', {name: en['theme.toDark'], exact: true});
+  const size = await toDark.boundingBox();
+  check(size != null && size.width >= 44 && size.height >= 44, `theme 390px: the switch is ${size?.width}x${size?.height} px, under 44 px`);
+  check((await page.getByRole('link', {name: en['action.edit'], exact: true}).count()) === 1, 'theme 390px: no Edit action for a paste the reader may edit');
+  await toDark.focus();
+  await page.keyboard.press('Enter');
+  check(copyColour(await paintedNow(page)) === darkCopy, `theme: after the switch the Copy button is ${await paintedNow(page)}, not dark ${darkCopy}`);
+  await page.screenshot({path: join(out, '390-light-switched-dark.png')});
+
+  await page.addInitScript(recordFirstFrames);
+  await page.reload({waitUntil: 'networkidle'});
+  const frames = await firstFrames(page);
+  const settled = await paintedNow(page);
+  check(copyColour(settled) === darkCopy, `theme: after a reload the page switched to dark paints ${settled}`);
+  const light = frames.filter(frame => frame !== settled);
+  check(light.length === 0, `theme: reloading a page switched to dark paints ${JSON.stringify([...new Set(light)])} first`);
+  const toLight = page.getByRole('button', {name: en['theme.toLight'], exact: true});
+  if ((await toLight.count()) !== 1) {
+    check(false, 'theme: after the reload the switch does not offer light mode');
+    await context.close();
+    return;
+  }
+  await toLight.click();
+  const stored = await page.evaluate(
+    ([attribute, key]) => [document.documentElement.getAttribute(attribute), localStorage.getItem(key)],
+    [THEME_ATTRIBUTE, THEME_STORAGE_KEY] as const,
+  );
+  check(stored.every(value => value == null), `theme: switching back to the OS mode left ${JSON.stringify(stored)}`);
+  check(copyColour(await paintedNow(page)) === lightCopy, 'theme: switching back to the OS mode does not paint light');
+  await page.emulateMedia({colorScheme: 'dark'});
+  check(copyColour(await paintedNow(page)) === darkCopy, 'theme: following the OS, the page does not follow a switch to dark');
+  check((await page.getByRole('button', {name: en['theme.toLight'], exact: true}).count()) === 1, 'theme: following the OS into dark, the switch does not offer light mode');
+  console.log(`theme: Copy paints ${lightCopy} in light and ${darkCopy} in dark from the first frame; switch ${size?.width}x${size?.height} px at 390 px`);
+  await context.close();
+}
+
+/**
+ * The title row's actions are one set: every button has the same height and top edge within its row
+ * (rows may wrap on a phone), and Copy keeps its width when its label turns into its feedback.
+ */
+async function checkActions(page: Page, name: string, wide: boolean) {
+  const group = page.locator(`[role="group"][aria-label="${en['action.actions']}"]`);
+  const boxes = await group.locator(':scope > *').evaluateAll(elements =>
+    elements.map(element => {
+      const box = element.getBoundingClientRect();
+      return {text: element.textContent ?? '', top: Math.round(box.top), height: Math.round(box.height), width: box.width};
+    }),
+  );
+  const heights = new Set(boxes.map(box => box.height));
+  check(heights.size === 1, `${name}: the actions have heights ${JSON.stringify(boxes.map(box => [box.text, box.height]))}`);
+  const rows = new Map<number, number>();
+  for (const box of boxes) rows.set(box.top, (rows.get(box.top) ?? 0) + 1);
+  // One row on a wide screen; on a phone the row may wrap once, each line level.
+  check(rows.size <= (wide ? 1 : 2), `${name}: the actions sit at tops ${JSON.stringify(boxes.map(box => [box.text, box.top]))}`);
+  const copy = group.locator('button').first();
+  const before = await copy.evaluate(button => button.getBoundingClientRect().width);
+  await copy.click();
+  await page.waitForFunction(([selector, label]) => document.querySelector(selector)?.getAttribute('aria-label') !== label, [COPY, en['action.copy']] as const);
+  const after = await copy.evaluate(button => [button.getBoundingClientRect().width, button.getAttribute('aria-label')] as const);
+  check(Math.abs(after[0] - before) < 0.5, `${name}: Copy is ${before} px wide and ${after[0]} px as "${after[1]}"`);
+  console.log(`${name}: ${boxes.length} actions ${[...heights].join('/')} px high in ${rows.size} row(s); Copy ${Math.round(before)} px as "Copy" and as "${after[1]}"`);
 }
 
 /** Whether the entry the rail marks current lies inside the rail's visible part. */
@@ -505,9 +655,11 @@ async function main() {
         await checkCurrent(page, `${shot.name} after clicking the drawer entry #${target}`, target);
         await page.screenshot({path: join(out, `${shot.name}-outline-jump.png`)});
       }
+      await checkActions(page, shot.name, shot.width >= 1024);
       await context.close();
     }
 
+    await checkTheme(browser, url, out);
     await checkWidthsAndTables(browser, url, fixturePaste().paste.id);
     const long = `${url.slice(0, -1)}${LONG_PATH}`;
     await checkWidthsAndTables(browser, long, 'long');

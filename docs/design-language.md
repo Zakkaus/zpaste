@@ -68,11 +68,11 @@ proposal and needs owner approval with the P1 first screen.
 | --- | --- |
 | `--color-background-body` | Page background. |
 | `--color-background-surface` | Panels that must stand apart from the page: the side outline, the workspace list. |
-| `--color-background-muted` | Code block and table header background. |
+| `--color-background-muted` | Code block background. |
 | `--color-background-popover` | Menus and the phone outline drawer. |
 | `--color-overlay` | Scrim behind the drawer and dialogs. |
-| `--color-border` | Hairlines: table rows, column edges, the line between outline and text. |
-| `--color-border-emphasized` | Focused fields and the current outline entry's marker. |
+| `--color-border` | Hairlines: between table rows, the line between outline and text. |
+| `--color-border-emphasized` | Focused fields, the current outline entry's marker and the line under a table's header row. |
 | `--color-text-primary` | Body text and headings. |
 | `--color-text-secondary` | Metadata: expiry, version, line numbers. |
 | `--color-text-disabled` | Disabled controls only. |
@@ -91,7 +91,7 @@ The rest of the axes the positioning leaves to decide:
 | Separation | Hairlines, no elevation and no boxes: an opaque top bar with a `--color-border` line under it, a line under the title row, and the outline rail set off by its label and track. | Proposed with the P1 first screen |
 | Hues | The accent plus the semantic set; the mind map adds a few low-saturation branch colours (see below). | Branch colour tokens open |
 | Motion | None decided beyond `web/AGENTS.md`. | Open |
-| Theme | Light, dark and follow-system. Upstream already stores a theme choice in a cookie. Whether the page resolves the theme before first paint from that cookie, and whether an OS switch mid-session moves the page, is open. | Open |
+| Theme | Light, dark and follow-system, switched as on gentoozh.org: one icon button in the top bar names the mode it switches to (a moon in light mode, a sun in dark mode), and pressing it on the OS's own mode goes back to following the OS. A chosen mode is kept in `localStorage` (`zpaste-theme`) and set as `data-theme` on `<html>` by `public/theme-boot.js`, a blocking script in the head, before the first paint; the Content Security Policy allows no inline script. Without a choice the page follows the OS, including a switch while it is open. Upstream's theme cookie is not read. | Proposed with the P1 first screen |
 
 ## The reading page's first screen
 
@@ -103,14 +103,28 @@ Proposed for the owner's approval with the P1 first screen; each value is a them
 - **Title row.** The page's h1 takes the heading-2 role, one step above the body
   and one below the paste's own first heading, which carries the page. Details
   take the supporting role in `--color-text-secondary`. Copy is the view's one
-  primary button; Raw and Download are secondary buttons of the same size. On a
+  primary button; Edit, Raw and Download are secondary buttons of the same size,
+  in that order: the two actions on the paste first, then the two that open it
+  elsewhere. None carries an icon, as in gentoozh.org's toolbar rows. Copy's
+  feedback ("Copied", "Failed") replaces its label without changing its width.
+  Edit shows only when the shell says the reader may edit (`can_edit`). On a
   phone the buttons take their own row.
+- **Theme switch.** At the end of the top bar, before the phone outline button
+  (see the Theme row above).
 - **Headings in the paste.** The paste's `#` renders as h2, because the title
   row holds the h1, but keeps the look of the level the author wrote: h2 takes
   the heading-1 role, h3 heading-2, and so on.
-- **Tables.** Cells use the label role, not the reading body size; the header
-  row stands on `--color-background-muted`; the first column stays on an opaque
-  surface while the rest scrolls. On a phone it is as wide as its longest
+- **Tables.** Cells use the label role, not the reading body size, with compact
+  padding, aligned to the top. Rows are told apart by `--color-border` hairlines
+  alone: no column rules and no outer box, and the first and last columns line
+  up with the text around the table. The header row is the label in
+  `--color-text-secondary` on the page's own surface, over one
+  `--color-border-emphasized` line. Inline code in a cell has the code face
+  without its chip. Columns take the widths automatic layout gives their
+  content, and code in a cell may wrap after `/` and `-`, so a table of up to
+  three columns fits the column from tablet width up; a wider table scrolls in
+  its box with an edge shadow. On a phone the first column stays on an opaque
+  surface while the rest scrolls. It is as wide as its longest
   unbreakable piece and at most half of the table's visible box, padding
   included. Text in it wraps at spaces, after `/` and after `-`, never inside a
   name such as `REQUIREMENTS.md`; only a piece wider than half the box on its
@@ -248,7 +262,7 @@ tables, side-by-side diffs, splitting multi-file pastes.
 | D3 | The tokenizer for languages Astryx 0.7.16 does not cover (INI, TOML and others), loaded per language. | P1 |
 | D4 | Which Astryx token names the theme package exports, and the tokens for mind map branch colours. | P1, P1b |
 | D5 | Separation device (hairlines or elevation) and motion. | P1 first screen |
-| D6 | Theme and locale resolution before first paint, and whether an OS theme switch moves an open page. | P1 |
+| D6 | Locale resolution before first paint. The theme is resolved before first paint and follows an OS switch (see Theme), pending the owner's approval. | P1 |
 | D7 | Recording Markdown tables on phones as an exception to `web/AGENTS.md`, "Phone width", in `REQUIREMENTS.md`, "Exceptions". | P1 |
 | D8 | Layout library for the mind map: markmap or `d3-flextree`. | P1b |
 | D9 | What the edit page offers after a 412: reload, show a diff, or overwrite. gzpaste's behaviour is decided (plan section 五); the page's is not. | P2 |

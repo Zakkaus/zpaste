@@ -15,8 +15,8 @@ function FencedCode({code, language}: {code: string; language?: string}) {
 
 /**
  * Inline code as Astryx draws it, with a break opportunity (`<wbr>`, which adds no text, so a copied
- * path is the path as written) after each `/`. The stylesheet lets those opportunities act only in a
- * phone table's fixed first column, where a long path wraps at its separators instead of mid-name;
+ * path is the path as written) after each `/`. The stylesheet lets those opportunities act only in
+ * table cells, where a long path wraps at its separators instead of mid-name or widening the table;
  * elsewhere they are hidden and inline code wraps as before. Supplying this renderer replaces the one
  * Astryx uses in table cells, whose only change keeps a token whole; the stylesheet restores that.
  */

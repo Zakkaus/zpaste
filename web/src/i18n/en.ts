@@ -14,11 +14,15 @@ export const en = {
   'action.copy': 'Copy',
   'action.copied': 'Copied',
   'action.copyFailed': 'Copy failed',
+  'action.copyFailedShort': 'Failed',
   'action.copiedAnnouncement': 'Paste copied to the clipboard',
   'action.download': 'Download',
+  'action.edit': 'Edit',
   'action.actions': 'Paste actions',
   'outline.label': 'On this page',
   'outline.open': 'Outline',
+  'theme.toDark': 'Switch to dark mode',
+  'theme.toLight': 'Switch to light mode',
 } as const;
 
 export type MessageKey = keyof typeof en;

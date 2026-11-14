@@ -2,7 +2,6 @@ import {Fragment, useState, type ReactNode} from 'react';
 import * as stylex from '@stylexjs/stylex';
 import {Button} from '@astryxdesign/core/Button';
 import {useClipboard} from '@astryxdesign/core/hooks';
-import {Icon} from '@astryxdesign/core/Icon';
 import {HStack, VStack} from '@astryxdesign/core/Layout';
 import {Heading} from '@astryxdesign/core/Heading';
 import {Text} from '@astryxdesign/core/Text';
@@ -25,7 +24,21 @@ const styles = stylex.create({
   },
   // A detail never breaks inside its value; the row breaks between details.
   detail: {whiteSpace: 'nowrap'},
+  // Copy's visible labels share one grid cell, so the button is as wide as its longest label in every state.
+  labels: {display: 'inline-grid', justifyItems: 'center'},
+  label: {gridArea: '1 / 1'},
+  labelHidden: {visibility: 'hidden'},
 });
+
+/**
+ * Copy's states: the accessible name, and the visible label, which stays as short as "Copied" so the
+ * button keeps the width of its neighbours' kind. The name still says what failed.
+ */
+const COPY_STATES = {
+  copy: {name: 'action.copy', visible: 'action.copy'},
+  copied: {name: 'action.copied', visible: 'action.copied'},
+  failed: {name: 'action.copyFailed', visible: 'action.copyFailedShort'},
+} as const;
 
 /**
  * The page title row: the paste's title and details, with its actions at the end. The title is
@@ -61,29 +74,40 @@ export function PasteHeader({data, extension}: {data: EmbeddedPaste; extension: 
           ))}
         </Text>
       </VStack>
-      <PasteActions content={data.content} id={paste.id} fileName={fileName} />
+      <PasteActions content={data.content} id={paste.id} fileName={fileName} canEdit={data.can_edit === true} />
     </HStack>
   );
 }
 
 /**
- * Copy is the view's one primary action; Raw and Download are secondary buttons of the same size.
+ * Copy is the view's one primary action; Edit, Raw and Download are secondary buttons of the same size.
+ * None carries an icon, as in gentoozh.org's toolbar rows, so the four read as one set; Copy's feedback
+ * replaces its label in place without changing its width.
+ * Edit comes next to Copy because both act on the paste; Raw and Download open it elsewhere. Edit shows
+ * only when the shell says the reader may edit (`can_edit`) and opens `/<id>/edit`, the edit page (P2).
  * Raw and Download use the existing routes (`/dl` names the file after the key, so it keeps the extension);
  * Copy copies the text that is already in the page.
  */
-function PasteActions({content, id, fileName}: {content: string; id: string; fileName: string}) {
+function PasteActions({content, id, fileName, canEdit}: {content: string; id: string; fileName: string; canEdit: boolean}) {
   const {copy, isCopied} = useClipboard({announce: t('action.copiedAnnouncement')});
   const [isFailed, setFailed] = useState(false);
-  const copyLabel = isCopied ? t('action.copied') : isFailed ? t('action.copyFailed') : t('action.copy');
+  const state = isCopied ? 'copied' : isFailed ? 'failed' : 'copy';
   return (
     <HStack gap={SPACE.cluster} role="group" aria-label={t('action.actions')} xstyle={styles.wrap}>
       <Button
         variant="primary"
         size={BUTTON.toolbar}
-        label={copyLabel}
-        icon={<Icon icon={isCopied ? 'check' : 'copy'} />}
-        onClick={() => void copy(content).then(copied => setFailed(!copied))}
-      />
+        label={t(COPY_STATES[state].name)}
+        onClick={() => void copy(content).then(copied => setFailed(!copied))}>
+        <span {...stylex.props(styles.labels)}>
+          {Object.entries(COPY_STATES).map(([key, {visible}]) => (
+            <span key={key} aria-hidden {...stylex.props(styles.label, key !== state && styles.labelHidden)}>
+              {t(visible)}
+            </span>
+          ))}
+        </span>
+      </Button>
+      {canEdit ? <Button variant="secondary" size={BUTTON.toolbar} label={t('action.edit')} href={`/${id}/edit`} /> : null}
       <Button variant="secondary" size={BUTTON.toolbar} label={t('action.raw')} href={`/raw/${id}`} />
       <Button variant="secondary" size={BUTTON.toolbar} label={t('action.download')} href={`/dl/${fileName}`} />
     </HStack>

@@ -32,6 +32,12 @@ export interface EmbeddedPaste {
   etag: string;
   /** The extension in the reading URL (`/<id>.<ext>`), which picks the renderer before the stored one; null for none. */
   url_extension: string | null;
+  /**
+   * Whether the reader may edit this paste, which shows the Edit action. The shell sets it from the
+   * request's owner credentials (cookie or Bearer, docs/architecture.md "Serving a page") from P1
+   * slice 4; until then it is absent, which means false. The server still checks every write.
+   */
+  can_edit?: boolean;
 }
 
 /**

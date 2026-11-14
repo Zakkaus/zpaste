@@ -8,6 +8,7 @@ import {Text} from '@astryxdesign/core/Text';
 import {TopNav} from '@astryxdesign/core/TopNav';
 import {Divider} from '@astryxdesign/core/Divider';
 import {SPACE} from '@gentoozh/astryx-theme/scale';
+import {ThemeToggle} from '../chrome/ThemeToggle';
 import type {EmbeddedPaste} from '../shell/embedded';
 import {t} from '../i18n/messages';
 import {layout, media} from '../theme/layout.stylex';
@@ -52,7 +53,12 @@ export function ReaderPage({data}: {data: EmbeddedPaste}) {
               {t('app.name')}
             </Text>
           }
-          endContent={hasOutline ? <OutlineDrawer items={outline} /> : null}
+          endContent={
+            <HStack gap={SPACE.toolbar} vAlign="center">
+              <ThemeToggle />
+              {hasOutline ? <OutlineDrawer items={outline} /> : null}
+            </HStack>
+          }
         />
       }>
       <HStack gap={SPACE.group} vAlign="start" hAlign="center" width="100%">

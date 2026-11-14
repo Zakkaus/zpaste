@@ -57,66 +57,94 @@
   --text-body-leading: var(--text-label-leading);
 }
 
-/* The header row stands on the muted surface (docs/design-language.md, "Tokens"), drawn as a flat image layer so the sticky cell below can put it over an opaque colour. */
-.body :global(.astryx-table-scroll-wrapper) th {
-  background-image: linear-gradient(var(--color-background-muted), var(--color-background-muted));
+/*
+ * Rows are told apart by hairlines alone: no column rules and no outer box, which Astryx's Markdown
+ * table draws as a full grid (docs/design-language.md, "Tables"). The text of the first and last
+ * columns lines up with the paragraphs around the table. Cells of unequal height align to the top
+ * (web/AGENTS.md, "Alignment").
+ */
+.body :global(.astryx-table-scroll-wrapper) table {
+  border-width: 0;
 }
-
-/* Cells of unequal height align to the top (web/AGENTS.md, "Alignment"). */
-.body :global(.astryx-table-cell) {
+.body :global(.astryx-table-scroll-wrapper) :is(th, td) {
+  border-inline-width: 0;
+  padding-block: var(--spacing-1-5);
+  padding-inline: var(--spacing-2);
+  line-height: var(--text-label-leading);
   vertical-align: top;
 }
-
-/*
- * The first column stays while the rest scrolls under it, on an opaque surface; its header cell
- * keeps the muted layer above that surface.
- */
 .body :global(.astryx-table-scroll-wrapper) :is(th, td):first-child {
-  position: sticky;
-  inset-inline-start: 0;
-  z-index: 1;
-  background-color: var(--color-background-surface);
+  padding-inline-start: 0;
+}
+.body :global(.astryx-table-scroll-wrapper) :is(th, td):last-child {
+  padding-inline-end: 0;
+}
+.body :global(.astryx-table-scroll-wrapper) tbody tr:last-child > td {
+  border-block-end-width: 0;
+}
+
+/* The header is a quieter label row over one stronger hairline, on the page's own surface. */
+.body :global(.astryx-table-scroll-wrapper) th {
+  color: var(--color-text-secondary);
+  font-weight: var(--text-label-weight);
+  border-block-end-color: var(--color-border-emphasized);
 }
 
 /*
- * On a phone the fixed column is as wide as its longest unbreakable piece, and at most half of the
- * table's visible box, padding and divider included, so the columns that scroll stay readable. The
- * cap is measured against the scroll wrapper (a size container, so `cqi`), not the viewport and not
- * the full table width. Astryx sizes these cells as content boxes with `--spacing-2` padding on each
- * side, between the table's outer edge and a grid divider (`--border-width` each), so the cap on the
- * text box is 50cqi less those. Astryx's readable floor for the column (the header cell's
- * `--x-minWidth`) is kept below the cap and lowered to it above.
- *
- * Text wraps between words; code (file paths, identifiers) also wraps after `/` (MarkdownView's
- * `<wbr>`) and `-`, never inside a name such as `REQUIREMENTS.md`: the column's min-content is its
- * longest such piece, and the table gives the column at least that. Only a piece wider than the cap
- * on its own, such as a long hash, breaks inside itself (`break-word`). Wrapping inserts no
- * characters, so a copied cell is the text as written.
+ * Inline code in a cell is set in the code face without the chip it has in a paragraph, so a column
+ * of file names reads as text rather than a wall of pills. Astryx's own table-cell code keeps a token
+ * whole (word-break normal); MarkdownView's renderer replaces it, so that is restored here.
+ */
+.body :global(.astryx-table-scroll-wrapper) code {
+  background: none;
+  padding-inline: 0;
+  border-radius: 0;
+  word-break: normal;
+}
+
+/*
+ * Columns take the widths automatic table layout gives their content, over Astryx's readable floors.
+ * Code in a cell may wrap after `/` (MarkdownView's `<wbr>`) and `-`, never inside a name such as
+ * `REQUIREMENTS.md`, so a column of paths gives way before a prose column does and a table that fits
+ * at its natural size does not scroll. Wrapping inserts no characters, so a copied cell is the text
+ * as written. Outside table cells the break opportunities are hidden and inline code wraps as before.
+ */
+.body wbr {
+  display: none;
+}
+.body :global(.astryx-table-scroll-wrapper) wbr {
+  display: inline;
+}
+.body :global(.astryx-table-scroll-wrapper) code {
+  white-space: normal;
+}
+
+/*
+ * On a phone the first column stays while the rest scrolls under it, on an opaque surface. It is as
+ * wide as its longest unbreakable piece, and at most half of the table's visible box, padding
+ * included, so the columns that scroll stay readable. The cap is measured against the scroll wrapper
+ * (a size container, so `cqi`), not the viewport and not the full table width. Astryx sizes these
+ * cells as content boxes; the first column has `--spacing-2` padding at its end only, so the cap on
+ * the text box is 50cqi less that. Astryx's readable floor for the column (the header cell's
+ * `--x-minWidth`) is kept below the cap and lowered to it above. Only a piece wider than the cap on
+ * its own, such as a long hash, breaks inside itself (`break-word`).
  */
 .body :global(.astryx-table-scroll-wrapper) {
   container-type: inline-size;
 }
-/* Astryx's own table-cell code keeps a token whole (word-break normal); MarkdownView's renderer replaces it. */
-.body :global(.astryx-table-scroll-wrapper) code {
-  word-break: normal;
-}
-/* The break opportunities MarkdownView puts after `/` in inline code act in the rule below only. */
-.body wbr {
-  display: none;
-}
 @media (max-width: 640px) {
   .body :global(.astryx-table-scroll-wrapper) :is(th, td):first-child {
-    --_first-column-cap: calc(50cqi - 2 * var(--spacing-2) - 2 * var(--border-width));
+    --_first-column-cap: calc(50cqi - var(--spacing-2));
+    position: sticky;
+    inset-inline-start: 0;
+    z-index: 1;
+    background-color: var(--color-background-surface);
     min-width: min(var(--x-minWidth, 0px), var(--_first-column-cap));
     max-width: var(--_first-column-cap);
     overflow-wrap: break-word;
   }
   .body :global(.astryx-table-scroll-wrapper) :is(th, td):first-child code {
-    white-space: normal;
     overflow-wrap: break-word;
-  }
-  .body :global(.astryx-table-scroll-wrapper) :is(th, td):first-child wbr {
-    display: inline;
   }
 }
 

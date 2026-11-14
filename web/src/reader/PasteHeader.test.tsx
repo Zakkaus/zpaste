@@ -42,6 +42,27 @@ describe('PasteHeader actions', () => {
   });
 });
 
+describe('PasteHeader copy action', () => {
+  it('keeps every visible state in the button, so its width does not change, and names the action', () => {
+    const html = renderToString(<PasteHeader data={data()} extension="md" />);
+    expect(html).toMatch(/<button[^>]*aria-label="Copy"/);
+    for (const label of ['>Copy<', '>Copied<', '>Failed<']) expect(html).toContain(label);
+  });
+});
+
+describe('PasteHeader edit action', () => {
+  it('hides Edit when the shell does not say the reader may edit', () => {
+    expect(hrefs(renderToString(<PasteHeader data={{...data(), can_edit: false}} extension="md" />))).not.toContain('/abc123/edit');
+    expect(renderToString(<PasteHeader data={data()} extension="md" />)).not.toContain('>Edit<');
+  });
+
+  it('links Edit to /<id>/edit, after Copy and before Raw and Download', () => {
+    const html = renderToString(<PasteHeader data={{...data(), can_edit: true}} extension="md" />);
+    expect(hrefs(html)).toEqual(['/abc123/edit', '/raw/abc123', '/dl/abc123.md']);
+    expect(html.indexOf('Copy')).toBeLessThan(html.indexOf('Edit'));
+  });
+});
+
 describe('PasteHeader title and details', () => {
   it('names an untitled paste after its id and draws the page h1', () => {
     const html = renderToString(<PasteHeader data={data()} extension="md" />);

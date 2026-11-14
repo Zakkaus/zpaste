@@ -30,6 +30,8 @@ export function embeddedPaste(id: string, extension: string | null, content: str
     content,
     etag: `"${'0'.repeat(64)}"`,
     url_extension: extension,
+    // The preview and the screenshots show the reading page as its owner sees it, with Edit.
+    can_edit: true,
   };
 }
 
