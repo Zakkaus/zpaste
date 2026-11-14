@@ -79,16 +79,43 @@
 }
 
 /*
- * On a phone the fixed column takes at most part of the width, so the columns that scroll stay
- * readable; its text wraps between words instead of widening it.
+ * On a phone the fixed column takes at most 40% of the table's visible box, padding and divider
+ * included, so the columns that scroll stay readable. The cap is measured against the scroll wrapper
+ * (a size container, so `cqi`), not the viewport and not the full table width. Astryx sizes these
+ * cells as content boxes with `--spacing-2` padding on each side, between the table's outer edge and
+ * a grid divider (`--border-width` each), so the cap on the text box is 40cqi less those. Astryx's
+ * readable floor for the column (the header cell's `--x-minWidth`) is kept below the cap and lowered
+ * to it above.
+ *
+ * Text wraps between words. Code (file paths, identifiers) also wraps after `/` (MarkdownView's
+ * `<wbr>`) and `-` and, only when a piece is still wider than the cap, inside it: `anywhere` rather than `break-word`, because a table column
+ * is never narrower than its longest unbreakable token. Wrapping inserts no characters, so a copied
+ * cell is the text as written.
  */
+.body :global(.astryx-table-scroll-wrapper) {
+  container-type: inline-size;
+}
+/* Astryx's own table-cell code keeps a token whole (word-break normal); MarkdownView's renderer replaces it. */
+.body :global(.astryx-table-scroll-wrapper) code {
+  word-break: normal;
+}
+/* The break opportunities MarkdownView puts after `/` in inline code act in the rule below only. */
+.body wbr {
+  display: none;
+}
 @media (max-width: 640px) {
   .body :global(.astryx-table-scroll-wrapper) :is(th, td):first-child {
-    max-width: 40vw;
+    --_first-column-cap: calc(40cqi - 2 * var(--spacing-2) - 2 * var(--border-width));
+    min-width: min(var(--x-minWidth, 0px), var(--_first-column-cap));
+    max-width: var(--_first-column-cap);
     overflow-wrap: break-word;
   }
   .body :global(.astryx-table-scroll-wrapper) :is(th, td):first-child code {
     white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .body :global(.astryx-table-scroll-wrapper) :is(th, td):first-child wbr {
+    display: inline;
   }
 }
 

@@ -1,3 +1,4 @@
+import {Code} from '@astryxdesign/core/Code';
 import {CodeBlock} from '@astryxdesign/core/CodeBlock';
 import {Markdown, type MarkdownComponents} from '@astryxdesign/core/Markdown';
 import {MARKDOWN_PLUGINS} from './markdownPlugins';
@@ -12,7 +13,19 @@ function FencedCode({code, language}: {code: string; language?: string}) {
   return <CodeBlock code={code} language={language ?? 'plaintext'} highlightMode="spans" width="100%" isWrapped isCollapsible={false} />;
 }
 
-const COMPONENTS: MarkdownComponents = {code: FencedCode};
+/**
+ * Inline code as Astryx draws it, with a break opportunity (`<wbr>`, which adds no text, so a copied
+ * path is the path as written) after each `/`. The stylesheet lets those opportunities act only in a
+ * phone table's fixed first column, where a long path wraps at its separators instead of mid-name;
+ * elsewhere they are hidden and inline code wraps as before. Supplying this renderer replaces the one
+ * Astryx uses in table cells, whose only change keeps a token whole; the stylesheet restores that.
+ */
+function InlineCode({children}: {children: string}) {
+  const parts = children.split(/(?<=\/)(?=.)/);
+  return <Code>{parts.flatMap((part, index) => (index === 0 ? [part] : [<wbr key={index} />, part]))}</Code>;
+}
+
+const COMPONENTS: MarkdownComponents = {code: FencedCode, inlineCode: InlineCode};
 
 /**
  * A Markdown paste. Astryx Markdown renders React elements only and never raw HTML, so no sanitizer

@@ -27,9 +27,10 @@ describe('renderer choice', () => {
 describe('Markdown paste', () => {
   const html = renderToString(<MarkdownView source={SAMPLE} />);
 
-  it('lists the sections, not the title, and every entry has its heading', () => {
+  it('lists the title and the sections, and every entry has its heading', () => {
     const items = outlineItems(SAMPLE);
     expect(items.map(item => [item.label, item.level])).toEqual([
+      ['Release checklist', 1],
       ['Before the tag', 2],
       ['Gate summary', 3],
       ['Code samples', 2],
@@ -66,6 +67,13 @@ describe('wide tables', () => {
     const table = doc.querySelector('table');
     expect(table).not.toBeNull();
     expect(table?.closest(`.${WRAPPER}`)).not.toBeNull();
+  });
+
+  it('lets a path in inline code wrap after each slash without adding text', () => {
+    const doc = new DOMParser().parseFromString(renderToString(<MarkdownView source={'| `a/b/c/` | x |\n| --- | --- |\n| y | z |\n'} />), 'text/html');
+    const code = doc.querySelector('th code');
+    expect(code?.innerHTML).toBe('a/<wbr>b/<wbr>c/');
+    expect(code?.textContent).toBe('a/b/c/');
   });
 
   it('keeps the sticky first column and the edge shadow on that wrapper', () => {

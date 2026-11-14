@@ -110,8 +110,11 @@ Proposed for the owner's approval with the P1 first screen; each value is a them
   the heading-1 role, h3 heading-2, and so on.
 - **Tables.** Cells use the label role, not the reading body size; the header
   row stands on `--color-background-muted`; the first column stays on an opaque
-  surface while the rest scrolls, and takes at most 40% of a phone's width.
+  surface while the rest scrolls, and on a phone takes at most 40% of the
+  table's visible box, padding included; a long path in it wraps after `/`.
 - **Outline.** The rail carries an "On this page" label level with the title.
+  It lists the paste's `#` title and its sections down to `####`, so the entry
+  marked current is the section on screen from the first load.
   In the phone drawer each entry is at least the theme's touch height (44 px).
 
 ## Renderers
