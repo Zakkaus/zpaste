@@ -3,8 +3,14 @@
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 
-use super::{ORIGIN, call, create, create_in_browser, create_owned, paste};
-use crate::test_helpers::{Client, StoreCookies};
+use std::num::NonZeroUsize;
+use std::time::Duration;
+
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use wastebin_core::crypto::KdfLimit;
+
+use super::{Checked, ORIGIN, call, check, create, create_in_browser, create_owned, paste};
+use crate::test_helpers::{Client, Settings, StoreCookies};
 
 #[tokio::test]
 async fn create_without_credentials_returns_owner_token() {
@@ -217,4 +223,103 @@ async fn create_with_stale_cookie_mints_a_new_identity() {
     .await;
     assert_eq!(res.status, StatusCode::CREATED);
     assert!(res.header("set-cookie").is_some());
+}
+
+#[tokio::test]
+async fn create_with_password_is_429_while_every_derivation_slot_is_taken() {
+    let kdf = KdfLimit::new(NonZeroUsize::MIN, Duration::ZERO);
+    let client = Client::with_settings(
+        StoreCookies(false),
+        Settings {
+            kdf: kdf.clone(),
+            ..Settings::default()
+        },
+    )
+    .await;
+    let _held = kdf.acquire().await.expect("free slot");
+
+    let res = create(&client, json!({"password": "hunter2"})).await;
+    assert_eq!(res.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(res.error_type(), "rate_limited");
+    assert_eq!(res.header("retry-after"), Some("1"));
+
+    // Credential failures are answered before any derivation.
+    let res = call(
+        client
+            .post("/v1/pastes")
+            .bearer_auth("forged")
+            .json(&paste(json!({"password": "hunter2"}))),
+        "post",
+        "/v1/pastes",
+    )
+    .await;
+    assert_eq!(res.status, StatusCode::UNAUTHORIZED);
+
+    // A create without a password derives nothing, so the limit does not apply.
+    let res = create(&client, json!({})).await;
+    assert_eq!(res.status, StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn timeout_is_408_in_the_envelope() {
+    let client = Client::with_settings(
+        StoreCookies(false),
+        Settings {
+            timeout: Duration::from_millis(100),
+            ..Settings::default()
+        },
+    )
+    .await;
+
+    // Announce a body and send only part of it, so the request outlives the timeout.
+    let mut socket = tokio::net::TcpStream::connect(client.addr())
+        .await
+        .expect("connect");
+    socket
+        .write_all(
+            b"POST /v1/pastes HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\
+              Content-Type: application/json\r\nContent-Length: 64\r\n\r\n{\"paste\"",
+        )
+        .await
+        .expect("write");
+    let mut raw = Vec::new();
+    tokio::time::timeout(Duration::from_secs(10), socket.read_to_end(&mut raw))
+        .await
+        .expect("answered within 10 s")
+        .expect("read");
+
+    let res = check(parse_response(&raw), "post", "/v1/pastes");
+    assert_eq!(res.status, StatusCode::REQUEST_TIMEOUT);
+    assert_eq!(res.error_type(), "timeout");
+}
+
+/// An HTTP/1.1 response with a `Content-Length` body, as read from a raw socket.
+fn parse_response(raw: &[u8]) -> Checked {
+    let split = raw
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .expect("end of head");
+    let head = std::str::from_utf8(&raw[..split]).expect("ASCII head");
+    let mut lines = head.split("\r\n");
+    let status = lines
+        .next()
+        .and_then(|line| line.split(' ').nth(1))
+        .and_then(|code| code.parse::<u16>().ok())
+        .and_then(|code| StatusCode::from_u16(code).ok())
+        .expect("status line");
+
+    let mut headers = reqwest::header::HeaderMap::new();
+    for line in lines {
+        let (name, value) = line.split_once(':').expect("header line");
+        headers.append(
+            reqwest::header::HeaderName::try_from(name).expect("header name"),
+            reqwest::header::HeaderValue::try_from(value.trim()).expect("header value"),
+        );
+    }
+
+    Checked {
+        status,
+        headers,
+        body: raw[split + 4..].to_vec(),
+    }
 }

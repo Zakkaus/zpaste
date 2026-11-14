@@ -41,7 +41,7 @@ macro_rules! error_responses {
 }
 
 error_responses! {
-    Error: "Any other error, in the same shape (for example 405, 415, 500, 503).";
+    Error: "Any other error, in the same shape (for example 405, 408, 415, 500, 503).";
     BadRequest: "The request is malformed or a field is invalid (`bad_request`). Body parse errors are 400, not 422.",
         example = json!({"code": 400, "type": "bad_request", "title": "Bad Request", "message": "invalid marker", "request_id": "req-1"});
     Unauthorized: "No credentials, or credentials that fail verification (`unauthorized`).\nOn an edit of an encrypted paste, also a missing or wrong\n`X-Paste-Password` (`wrong_password`); nothing is written.\n";
@@ -61,5 +61,5 @@ error_responses! {
         example = json!({"code": 412, "type": "version_conflict", "title": "Precondition Failed", "message": "content changed since version 3", "request_id": "req-1"});
     EntryPreconditionFailed: "`If-Match` matches no current version (`version_conflict`). `ETag`\ncarries the current version when the entry has one; it is absent when the\nname is new or its paste has expired.\n";
     PayloadTooLarge: "The body exceeds `WASTEBIN_MAX_BODY_SIZE` bytes (`payload_too_large`).\nHistory limits never cause it; they trim old versions instead.\n";
-    TooManyRequests: "The shared limit on password derivation (concurrency, or rate per client\nIP) is exceeded (`rate_limited`). Only requests that derive a key count.\n";
+    TooManyRequests: "Every slot of the shared limit on concurrent password key derivations\nstayed taken while the request waited (`rate_limited`). Nothing was derived,\nwritten or consumed. Only requests that derive a key count.\n";
 }

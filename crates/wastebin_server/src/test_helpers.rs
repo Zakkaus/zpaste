@@ -10,6 +10,7 @@ use tokio::net::TcpListener;
 use crate::cache::Cache;
 use crate::page;
 
+use wastebin_core::crypto::KdfLimit;
 use wastebin_core::db::{self, Database};
 use wastebin_core::expiration::ExpirationSet;
 use wastebin_highlight::{Highlighter, Theme};
@@ -22,9 +23,29 @@ pub(crate) struct Client {
 /// Determine if the client should store cookies.
 pub(crate) struct StoreCookies(pub bool);
 
+/// Server settings a test can change.
+pub(crate) struct Settings {
+    pub kdf: KdfLimit,
+    pub timeout: Duration,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            kdf: KdfLimit::default(),
+            timeout: Duration::from_secs(30),
+        }
+    }
+}
+
 impl Client {
     pub(crate) async fn new(store_cookies: StoreCookies) -> Self {
+        Self::with_settings(store_cookies, Settings::default()).await
+    }
+
+    pub(crate) async fn with_settings(store_cookies: StoreCookies, settings: Settings) -> Self {
         let (db, handler) = Database::new(db::Open::Memory).expect("open memory database");
+        let db = db.with_kdf_limit(settings.kdf);
         let cache = Cache::new(NonZeroUsize::new(128).unwrap()).unwrap();
         let key = Key::generate();
         let expirations = "0".parse::<ExpirationSet>().unwrap();
@@ -52,7 +73,7 @@ impl Client {
         tokio::spawn(handler);
 
         tokio::spawn(async move {
-            let app = crate::make_app(state, Duration::from_secs(30), 1024 * 1024);
+            let app = crate::make_app(state, settings.timeout, 1024 * 1024);
 
             axum::serve(listener, app)
                 .with_graceful_shutdown(crate::shutdown_signal())
@@ -67,6 +88,11 @@ impl Client {
             .unwrap();
 
         Self { client, addr }
+    }
+
+    /// Address of the test server, for a test that speaks HTTP over a raw socket.
+    pub(crate) fn addr(&self) -> SocketAddr {
+        self.addr
     }
 
     pub(crate) fn get(&self, url: &str) -> RequestBuilder {

@@ -7,9 +7,10 @@ use std::time::Duration;
 
 use axum_extra::extract::cookie::Key;
 
+use wastebin_core::crypto::KdfLimit;
 use wastebin_core::env::vars::{
-    self, ADDRESS_PORT, BASE_URL, CACHE_SIZE, DATABASE_PATH, HTTP_TIMEOUT, MAX_BODY_SIZE,
-    PASTE_EXPIRATIONS, SIGNING_KEY,
+    self, ADDRESS_PORT, BASE_URL, CACHE_SIZE, DATABASE_PATH, HTTP_TIMEOUT, KDF_CONCURRENCY,
+    MAX_BODY_SIZE, PASTE_EXPIRATIONS, SIGNING_KEY,
 };
 use wastebin_core::{db, expiration};
 use wastebin_highlight::{Theme, theme::ParseThemeNameError};
@@ -32,6 +33,8 @@ pub(crate) enum Error {
     BaseUrl(String),
     #[error("failed to generate key from {SIGNING_KEY}: {0}")]
     SigningKey(String),
+    #[error("failed to parse {KDF_CONCURRENCY}, expected a positive number: {0}")]
+    KdfConcurrency(ParseIntError),
     #[error("failed to parse {HTTP_TIMEOUT}: {0}")]
     HttpTimeout(ParseIntError),
     #[error("failed to parse {PASTE_EXPIRATIONS}: {0}")]
@@ -149,6 +152,18 @@ pub fn http_timeout() -> Result<Duration, Error> {
             |s| s.parse::<u64>().map(|v| Duration::new(v, 0)),
         )
         .map_err(Error::HttpTimeout)
+}
+
+/// Limit on concurrent password key derivations; [`KdfLimit::DEFAULT_CONCURRENCY`] unless set.
+pub fn kdf_limit() -> Result<KdfLimit, Error> {
+    let concurrency = std::env::var(vars::KDF_CONCURRENCY)
+        .map_or_else(
+            |_| Ok(KdfLimit::DEFAULT_CONCURRENCY),
+            |s| s.parse::<NonZeroUsize>(),
+        )
+        .map_err(Error::KdfConcurrency)?;
+
+    Ok(KdfLimit::new(concurrency, KdfLimit::DEFAULT_WAIT))
 }
 
 /// Parse [`expiration::ExpirationSet`] from environment or return default.

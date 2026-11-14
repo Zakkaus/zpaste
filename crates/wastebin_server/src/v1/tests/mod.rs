@@ -55,12 +55,20 @@ async fn call(request: RequestBuilder, method: &str, path_template: &str) -> Che
     let status = response.status();
     let headers = response.headers().clone();
     let body = response.bytes().await.expect("body").to_vec();
-    let checked = Checked {
-        status,
-        headers,
-        body,
-    };
+    check(
+        Checked {
+            status,
+            headers,
+            body,
+        },
+        method,
+        path_template,
+    )
+}
 
+/// Validate a response already read against `method path_template` of the contract.
+fn check(checked: Checked, method: &str, path_template: &str) -> Checked {
+    let status = checked.status;
     let operation = &DOCUMENT["paths"][path_template][method];
     assert!(
         operation.is_object(),

@@ -24,8 +24,14 @@ prerelease and the image tag `0.1.0-beta.1`.
   `GET /v1/pastes/{id}/content` (plain pastes; encrypted and
   burn-after-reading pastes answer 409 and are never consumed). Every `/v1`
   response carries `X-Request-Id` and `Cache-Control: no-store`, and every
-  `/v1` error, the framework's included, uses one JSON shape.
+  `/v1` error, the framework's included, uses one JSON shape; a request that
+  outlives `WASTEBIN_HTTP_TIMEOUT` is 408 with type `timeout`.
   `docs/api/openapi.yaml` is now generated from the handlers.
+- Password key derivation is admission controlled. Every request that derives
+  a key (an encrypted create on `/v1` or the legacy routes, a legacy read with
+  a password) takes one of `WASTEBIN_KDF_CONCURRENCY` slots (default 2, about
+  128 MiB of Argon2 memory). A request that finds no free slot within 1 s is
+  429 with `Retry-After: 1`, and nothing is derived, written or consumed.
 
 ### Changed
 

@@ -7,7 +7,7 @@ use rusqlite::{Connection, Transaction, params, params_from_iter};
 use rusqlite_migration::{HookError, M, Migrations};
 use tokio::sync::oneshot;
 
-use crate::crypto::{self, Password};
+use crate::crypto::{self, KdfLimit, Password};
 use crate::expiration::Expiration;
 use crate::id::Id;
 use crate::revision;
@@ -51,6 +51,8 @@ pub enum Error {
 pub struct Database {
     /// Sender for database commands.
     sender: kanal::AsyncSender<Command>,
+    /// Admission control shared by every key derivation this database runs.
+    kdf: KdfLimit,
 }
 
 /// Actual database handler that owns the connection to the underlying sqlite database.
@@ -121,7 +123,7 @@ pub enum Open {
 
 /// Module with types for insertion.
 pub mod write {
-    use crate::crypto::{Encrypted, Password, Plaintext};
+    use crate::crypto::{Encrypted, KdfLimit, Password, Plaintext};
     use crate::db::Error;
     use async_compression::tokio::bufread::ZstdEncoder;
     use chacha20poly1305::XNonce;
@@ -183,12 +185,13 @@ pub mod write {
     }
 
     impl CompressedEntry {
-        /// Encrypt if password is set.
-        pub async fn encrypt(self) -> Result<DatabaseEntry, Error> {
+        /// Encrypt if password is set, with a slot of `kdf` for the key derivation.
+        pub async fn encrypt(self, kdf: &KdfLimit) -> Result<DatabaseEntry, Error> {
             let (data, nonce) = if let Some(password) = &self.entry.password {
+                let permit = kdf.acquire().await?;
                 let password = Password::from(password.as_bytes().to_vec());
                 let plaintext = Plaintext::from(self.data);
-                let Encrypted { ciphertext, nonce } = plaintext.encrypt(password).await?;
+                let Encrypted { ciphertext, nonce } = plaintext.encrypt(password, permit).await?;
                 (ciphertext, Some(nonce))
             } else {
                 (self.data, None)
@@ -205,7 +208,7 @@ pub mod write {
 
 /// Module with types for reading from the database.
 pub mod read {
-    use crate::crypto::{Encrypted, Password};
+    use crate::crypto::{Encrypted, KdfLimit, Password};
     use crate::db::Error;
     use crate::expiration::Expiration;
     use crate::id::Id;
@@ -300,9 +303,12 @@ pub mod read {
     }
 
     impl DatabaseEntry {
+        /// Decrypt with `password` when the entry is encrypted, with a slot of `kdf` for the key
+        /// derivation. A plain entry derives nothing and takes no slot.
         pub async fn decrypt(
             self,
             password: Option<Password>,
+            kdf: &KdfLimit,
         ) -> Result<CompressedReadEntry, Error> {
             match (self.nonce, password) {
                 (Some(_), None) => Err(Error::NoPassword),
@@ -312,8 +318,9 @@ pub mod read {
                     must_be_deleted: self.must_be_deleted,
                 }),
                 (Some(nonce), Some(password)) => {
+                    let permit = kdf.acquire().await?;
                     let encrypted = Encrypted::new(self.data, nonce);
-                    let decrypted = encrypted.decrypt(password).await?;
+                    let decrypted = encrypted.decrypt(password, permit).await?;
                     Ok(CompressedReadEntry {
                         data: decrypted,
                         metadata: self.metadata,
@@ -679,13 +686,25 @@ impl Database {
         let sender = sender.to_async();
         let handler = Handler::new(method, receiver)?;
         let fut = async move { tokio::task::spawn_blocking(|| handler.run()).await? };
-        Ok((Self { sender }, fut))
+        Ok((
+            Self {
+                sender,
+                kdf: KdfLimit::default(),
+            },
+            fut,
+        ))
+    }
+
+    /// Use `kdf` instead of [`KdfLimit::default`] for every key derivation of this database.
+    #[must_use]
+    pub fn with_kdf_limit(self, kdf: KdfLimit) -> Self {
+        Self { kdf, ..self }
     }
 
     /// Insert `entry` under a new random id into the database and optionally set owner to `uid`.
     /// Returns the id of the new entry on success.
     pub async fn insert(&self, entry: write::Entry) -> Result<(Id, write::Entry), Error> {
-        let entry = entry.compress().await?.encrypt().await?;
+        let entry = entry.compress().await?.encrypt(&self.kdf).await?;
 
         let (result, command_result) = oneshot::channel();
         self.sender
@@ -698,7 +717,7 @@ impl Database {
 
     /// Insert `entry` like [`Database::insert`] and return the [`Head`] of the new paste.
     pub async fn create(&self, entry: write::Entry) -> Result<Head, Error> {
-        let entry = entry.compress().await?.encrypt().await?;
+        let entry = entry.compress().await?.encrypt(&self.kdf).await?;
 
         let (result, command_result) = oneshot::channel();
         self.sender
@@ -755,7 +774,11 @@ impl Database {
             text,
             metadata,
             must_be_deleted,
-        } = entry.decrypt(password).await?.decompress().await?;
+        } = entry
+            .decrypt(password, &self.kdf)
+            .await?
+            .decompress()
+            .await?;
 
         let data = read::Data { text, metadata };
 
@@ -1107,19 +1130,37 @@ mod tests {
 
     #[tokio::test]
     async fn read_encrypted() -> Result<(), Box<dyn std::error::Error>> {
-        let db = new_db()?;
+        let limit = KdfLimit::new(std::num::NonZeroUsize::MIN, Duration::ZERO);
+        let db = new_db()?.with_kdf_limit(limit.clone());
 
-        let entry = write::Entry {
+        let entry = || write::Entry {
             text: "secret".to_string(),
             password: Some("pw".to_string()),
             burn_after_reading: Some(true),
             ..Default::default()
         };
 
-        let (id, _entry) = db.insert(entry).await?;
+        // With every derivation slot taken, neither an encrypted insert nor a password read
+        // derives, and the refused read consumes nothing.
+        let held = limit.acquire().await?;
+        assert!(matches!(
+            db.insert(entry()).await,
+            Err(Error::Crypto(crypto::Error::Busy))
+        ));
+        drop(held);
+
+        let (id, _entry) = db.insert(entry()).await?;
 
         // Without a password the content stays locked.
         assert!(matches!(db.get(id, None).await, Err(Error::NoPassword)));
+
+        let held = limit.acquire().await?;
+        assert!(matches!(
+            db.get(id, Some(Password::from("pw".as_bytes().to_vec())))
+                .await,
+            Err(Error::Crypto(crypto::Error::Busy))
+        ));
+        drop(held);
 
         // Encrypted takes precedence over burned, but the burn is still reported.
         let entry = db

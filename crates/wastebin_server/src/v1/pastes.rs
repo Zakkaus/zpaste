@@ -66,8 +66,10 @@ pub(crate) async fn get_version() -> Json<VersionDocument> {
 /// - Any other create (no `Origin`, as from curl and gzpaste) gets
 ///   `owner_token` in the body, once, and no cookie.
 ///
-/// A create is rate limited (429) only when it sets `password`, because only
-/// then does it derive a key. The general create rate is the proxy's.
+/// A create that sets `password` derives a key, so it takes a slot of the
+/// shared key-derivation limit; when none comes free within the server's wait
+/// it is 429 with `Retry-After`, and nothing is created. A create without a
+/// password never counts. The general create rate is the proxy's.
 #[cfg_attr(test, utoipa::path(
     post,
     path = "/v1/pastes",

@@ -170,8 +170,10 @@ paths:
         - Any other create (no `Origin`, as from curl and gzpaste) gets
           `owner_token` in the body, once, and no cookie.
 
-        A create is rate limited (429) only when it sets `password`, because only
-        then does it derive a key. The general create rate is the proxy's.
+        A create that sets `password` derives a key, so it takes a slot of the
+        shared key-derivation limit; when none comes free within the server's wait
+        it is 429 with `Retry-After`, and nothing is created. A create without a
+        password never counts. The general create rate is the proxy's.
       operationId: createPaste
       parameters:
       - $ref: '#/components/parameters/RequestId'
@@ -1217,6 +1219,7 @@ components:
           - workspace_full
           - payload_too_large
           - rate_limited
+          - timeout
           - method_not_allowed
           - unsupported_media_type
           - internal_error
@@ -1824,7 +1827,7 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorDocument'
     Error:
-      description: Any other error, in the same shape (for example 405, 415, 500, 503).
+      description: Any other error, in the same shape (for example 405, 408, 415, 500, 503).
       headers:
         Cache-Control:
           $ref: '#/components/headers/NoStore'
@@ -1925,8 +1928,9 @@ components:
             $ref: '#/components/schemas/ErrorDocument'
     TooManyRequests:
       description: |
-        The shared limit on password derivation (concurrency, or rate per client
-        IP) is exceeded (`rate_limited`). Only requests that derive a key count.
+        Every slot of the shared limit on concurrent password key derivations
+        stayed taken while the request waited (`rate_limited`). Nothing was derived,
+        written or consumed. Only requests that derive a key count.
       headers:
         Cache-Control:
           $ref: '#/components/headers/NoStore'

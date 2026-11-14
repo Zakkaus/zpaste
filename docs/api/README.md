@@ -101,7 +101,7 @@ only that the body exceeds `WASTEBIN_MAX_BODY_SIZE`.
 ## Error types by operation
 
 `Error.type` is a closed list. Every operation also has a `default` response
-for statuses no handler chooses: 405 `method_not_allowed`, 415
+for statuses no handler chooses: 405 `method_not_allowed`, 408 `timeout`, 415
 `unsupported_media_type`, 500 `internal_error`, 503 `service_unavailable`.
 
 | Operation | Status and `type` |
@@ -391,6 +391,13 @@ Decided while building P1, within the contract:
   paste without an owner, from before upstream stored uids, is 403 for
   everyone.
 - `X-Request-Id` the server makes is 32 lowercase hex digits.
-- A timeout (408 from the server's HTTP timeout) keeps upstream's empty body:
-  `Error.type` has no value for it. Adding one changes the closed list and
-  waits for the owner.
+- A request that outlives `WASTEBIN_HTTP_TIMEOUT` (body upload included) is
+  408 `timeout` in the envelope.
+- Every key derivation, on `/v1` and on the legacy routes, takes a slot of one
+  process-wide limit: `WASTEBIN_KDF_CONCURRENCY` slots (default 2), each held
+  until its Argon2 run ends. A request that finds no free slot within 1 s is
+  429 `rate_limited` with `Retry-After: 1` and derives, writes and consumes
+  nothing; the legacy routes answer 429 in their own format with the same
+  header. Credential, `Origin` and body errors are answered first. A request
+  that derives nothing (a create without a password, a read of a plain paste)
+  never takes a slot. The per-IP rate of plan section 四 is not built yet.

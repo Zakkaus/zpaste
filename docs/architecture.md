@@ -469,8 +469,12 @@ rollback past a migration restores the backup; see [workflow.md](workflow.md).
 - **Password key derivation.** Upstream's Argon2i uses 64 MiB of memory, 10
   iterations and 4 lanes per derivation. The parameters stay, because changing
   them would make existing encrypted pastes unreadable. The shared concurrency
-  limit and the per-IP rate limit (invariants 10, 11) bound the memory. Their
-  values are open and belong in `REQUIREMENTS.md`.
+  limit and the per-IP rate limit (invariants 10, 11) bound the memory.
+  Current: the concurrency limit is built in `Database` (`crypto::KdfLimit`),
+  so every derivation path, `/v1` and legacy, passes through it. It allows
+  `WASTEBIN_KDF_CONCURRENCY` derivations at once (default 2, 128 MiB); a
+  request waits up to 1 s for a slot, then gets 429 with `Retry-After: 1`.
+  The per-IP rate is not built yet (P1, A3).
 - **Two rate-limit layers.** Traefik limits every request (average 8, burst 40).
   Zpaste limits only the derivation paths. Both stay.
 - **Origin exposure.** Target: the origin accepts Cloudflare only, so the per-IP limit
@@ -520,7 +524,7 @@ Points the plan does not decide. Each blocks the phase named.
 | --- | --- | --- |
 | A1 | Settled 2026-11-15: utoipa 6.0.0, openapi-typescript 7.13.0 (with TypeScript 5.9.3) and openapi-fetch 0.17.0 work together; evidence and gaps in `docs/api/README.md`, "Generating the contract in P1". | P0 (contract draft) |
 | A2 | Image version scheme for `ghcr.io/zakkaus/zpaste:<version>`. | P0 (CI) |
-| A3 | Values of the derivation concurrency limit and per-IP rate. | P1 |
+| A3 | Value of the per-IP derivation rate, and confirmation of the concurrency default (2, `WASTEBIN_KDF_CONCURRENCY`). | P1 |
 | A4 | Whether the shell answers HTTP 404 or 200 for a missing or expired id (the app shows the same screen either way). | P1 |
 | A5 | Fate of `POST /{id}`, `POST /new`, `POST /delete/{id}` and `/theme` once the upstream forms are gone. | P1 |
 | A6 | Fate of `wastebin_highlight` and `wastebin_theme_showcase` once the server stops highlighting. | P1 |

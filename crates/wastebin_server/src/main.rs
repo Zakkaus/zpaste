@@ -20,8 +20,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{MethodRouter, Router, get, post};
 use axum_extra::extract::cookie::Key;
 use http::header::{
-    CONTENT_SECURITY_POLICY, REFERRER_POLICY, SERVER, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
-    X_XSS_PROTECTION,
+    CONTENT_SECURITY_POLICY, REFERRER_POLICY, RETRY_AFTER, SERVER, X_CONTENT_TYPE_OPTIONS,
+    X_FRAME_OPTIONS, X_XSS_PROTECTION,
 };
 use tokio::net::{TcpListener, UnixListener};
 use tower::ServiceBuilder;
@@ -123,13 +123,21 @@ async fn handle_service_errors(
 ) -> Response {
     // `/v1` answers errors with its own JSON envelope.
     let html = !v1::is_v1(req.uri().path());
-    let response = next.run(req).await;
+    let mut response = next.run(req).await;
 
     if !html {
         return response;
     }
 
     match response.status() {
+        // The key-derivation limit refused the request (`errors::Error`); the HTML and JSON
+        // bodies stay as the handler made them.
+        StatusCode::TOO_MANY_REQUESTS => {
+            response
+                .headers_mut()
+                .insert(RETRY_AFTER, errors::RETRY_AFTER);
+            response
+        }
         StatusCode::PAYLOAD_TOO_LARGE => (
             StatusCode::PAYLOAD_TOO_LARGE,
             html::Error {
@@ -254,12 +262,14 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
     let max_body_size = env::max_body_size()?;
     let base_url = env::base_url()?;
     let timeout = env::http_timeout()?;
+    let kdf_limit = env::kdf_limit()?;
     let expirations = env::expiration_set()?;
     let theme = env::theme()?;
     let title = env::title();
 
     let cache = Cache::new(cache_size)?;
     let (db, db_handler) = Database::new(method)?;
+    let db = db.with_kdf_limit(kdf_limit);
 
     tracing::debug!("serving on {socket_type}");
     tracing::debug!("caching {cache_size} paste highlights");

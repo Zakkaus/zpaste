@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use utoipa::ToSchema;
 
-use wastebin_core::db;
+use wastebin_core::{crypto, db};
 
 pub(crate) const REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 
@@ -46,6 +46,7 @@ pub(crate) enum ErrorType {
     WorkspaceFull,
     PayloadTooLarge,
     RateLimited,
+    Timeout,
     MethodNotAllowed,
     UnsupportedMediaType,
     InternalError,
@@ -82,7 +83,8 @@ pub(crate) struct ApiError {
     status: StatusCode,
     kind: ErrorType,
     message: String,
-    challenge: Option<HeaderValue>,
+    /// A header the error requires: `WWW-Authenticate` on a 401, `Retry-After` on a 429.
+    header: Option<(HeaderName, HeaderValue)>,
 }
 
 impl ApiError {
@@ -91,7 +93,7 @@ impl ApiError {
             status,
             kind,
             message: message.into(),
-            challenge: None,
+            header: None,
         }
     }
 
@@ -101,8 +103,20 @@ impl ApiError {
 
     pub(crate) fn unauthorized(message: impl Into<String>) -> Self {
         Self {
-            challenge: Some(BEARER_CHALLENGE),
+            header: Some((header::WWW_AUTHENTICATE, BEARER_CHALLENGE)),
             ..Self::new(StatusCode::UNAUTHORIZED, ErrorType::Unauthorized, message)
+        }
+    }
+
+    /// Every key-derivation slot stayed taken for the whole wait; nothing was derived.
+    pub(crate) fn rate_limited() -> Self {
+        Self {
+            header: Some((header::RETRY_AFTER, crate::errors::RETRY_AFTER)),
+            ..Self::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                ErrorType::RateLimited,
+                "too many password operations in progress; retry after the Retry-After delay",
+            )
         }
     }
 
@@ -133,6 +147,10 @@ impl ApiError {
                 (ErrorType::BadRequest, "malformed request")
             }
             StatusCode::NOT_FOUND => (ErrorType::NotFound, "no such resource"),
+            StatusCode::REQUEST_TIMEOUT => (
+                ErrorType::Timeout,
+                "the request was not completed within the server's time limit",
+            ),
             StatusCode::METHOD_NOT_ALLOWED => (
                 ErrorType::MethodNotAllowed,
                 "method not allowed on this resource",
@@ -166,6 +184,7 @@ impl From<db::Error> for ApiError {
     fn from(err: db::Error) -> Self {
         match err {
             db::Error::NotFound => Self::not_found(),
+            db::Error::Crypto(crypto::Error::Busy) => Self::rate_limited(),
             err => {
                 tracing::error!(%err, "database error on /v1");
                 Self::internal()
@@ -177,11 +196,6 @@ impl From<db::Error> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let mut response = self.status.into_response();
-        if let Some(challenge) = &self.challenge {
-            response
-                .headers_mut()
-                .insert(header::WWW_AUTHENTICATE, challenge.clone());
-        }
         response.extensions_mut().insert(self);
         response
     }
@@ -276,8 +290,8 @@ fn render(response: Response, error: ApiError, request_id: &HeaderValue) -> Resp
     let (mut parts, _body) = response.into_parts();
     parts.headers.remove(header::CONTENT_TYPE);
     parts.headers.remove(header::CONTENT_LENGTH);
-    if let Some(challenge) = error.challenge {
-        parts.headers.insert(header::WWW_AUTHENTICATE, challenge);
+    if let Some((name, value)) = error.header {
+        parts.headers.insert(name, value);
     }
 
     let body = ErrorDocument {
@@ -314,10 +328,5 @@ mod tests {
         let error = ApiError::from_status(StatusCode::UNPROCESSABLE_ENTITY).expect("mapped");
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
         assert_eq!(error.kind, ErrorType::BadRequest);
-    }
-
-    #[test]
-    fn statuses_without_a_type_keep_their_body() {
-        assert!(ApiError::from_status(StatusCode::REQUEST_TIMEOUT).is_none());
     }
 }
