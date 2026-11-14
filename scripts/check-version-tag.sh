@@ -3,7 +3,9 @@
 #
 # Zpaste's version is [workspace.package] version in the root Cargo.toml; the
 # server package (still named wastebin) inherits it. A release tag is "v"
-# followed by that version, for example v3.9.0.
+# followed by that version, for example v0.1.0 or v0.1.0-beta.1. A SemVer
+# prerelease suffix is part of the version; build metadata ("+...") is not
+# allowed, because the version becomes an image tag and "+" cannot be one.
 #
 # Exit codes: 0 the tag matches, 1 it does not, 2 the check could not run.
 # Usage: check-version-tag.sh TAG
@@ -23,6 +25,13 @@ if ! version="$(cargo metadata --no-deps --format-version=1 --manifest-path "$ma
     echo "cannot read the version of package wastebin from $manifest" >&2
     exit 2
 fi
+
+case "$version" in
+*+*)
+    echo "version $version in Cargo.toml has build metadata; a release version cannot" >&2
+    exit 1
+    ;;
+esac
 
 if [ "$tag" != "v$version" ]; then
     echo "tag $tag does not match version $version in Cargo.toml; expected v$version" >&2
