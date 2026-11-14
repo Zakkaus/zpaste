@@ -264,4 +264,8 @@ async fn new_paste_page_is_html() {
     let client = Client::new(StoreCookies(false)).await;
     let res = call(client.get("/"), "get", "/").await;
     assert_eq!(res.status, StatusCode::OK);
+    assert!(
+        String::from_utf8_lossy(&res.body).contains("<meta name=\"generator\" content=\"Zpaste "),
+        "the page names Zpaste as its generator"
+    );
 }

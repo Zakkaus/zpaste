@@ -31,6 +31,7 @@ prerelease and the image tag `0.1.0-beta.1`.
 
 - The server executable is named `zpaste`, and log lines name `zpaste` as their
   target. Configuration variables keep the `WASTEBIN_` prefix.
+- HTML pages name Zpaste in `<meta name="generator">`.
 - The container image runs as uid and gid 10001.
 - CI builds the image on every pull request and pushes it to
   `ghcr.io/zakkaus/zpaste` from main (`main` and `sha-<short>`). A version tag
